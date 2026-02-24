@@ -43,6 +43,13 @@ from notion_client import (
 from image_uploader import upload_telegram_photo
 from caskan_client import CaskanClient
 from estama_client import EstamaClient
+from seo_article import (
+    generate_seo_article,
+    get_template_preview,
+    SEO_CHECKLIST,
+    TEMPLATE_1_INFO,
+    TEMPLATE_2_INFO,
+)
 
 # ─── 設定 ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -85,6 +92,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
+        [KeyboardButton("✍️ SEO記事作成")],
         [KeyboardButton("🏢 キャスカン"), KeyboardButton("🌟 エスたま")],
     ],
     resize_keyboard=True,
@@ -109,6 +117,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📸 画像管理 — セラピストのNotionページに写真を保存\n"
         "💴 経費を入力 — 経費をNotionに記録\n"
         "📓 写メ日記 — テンプレートをコピーして使える\n"
+        "✍️ SEO記事作成 — SEOテンプレートで記事ドラフトを生成\n"
         "🏢 キャスカン — 売上・スケジュール確認\n"
         "🌟 エスたま — ご案内状況・アピール"
     )
@@ -1082,10 +1091,284 @@ async def handle_estama_confirm_callback(update: Update, context: ContextTypes.D
         await query.edit_message_text("❌ アピールをキャンセルしました。")
 
 
+# ─── ✍️ SEO記事作成 ────────────────────────────────────────
+async def handle_seo_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """SEO記事作成メニューを表示"""
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                f"{TEMPLATE_1_INFO['emoji']} ランキング紹介風",
+                callback_data="seo:select:ranking",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{TEMPLATE_2_INFO['emoji']} お悩み解決型ハウツー",
+                callback_data="seo:select:howto",
+            ),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "✍️ 【SEO記事作成】\n\n"
+        "SEOテンプレートに沿って、全力エステの情報を埋め込んだ\n"
+        "記事ドラフトをAIが自動生成します。\n\n"
+        "テンプレートを選択してください:",
+        reply_markup=reply_markup,
+    )
+
+
+async def handle_seo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """SEO記事作成コールバック処理"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("seo:"):
+        return
+
+    parts = data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+
+    if action == "select":
+        template_type = parts[2] if len(parts) > 2 else ""
+        if template_type not in ("ranking", "howto"):
+            await query.edit_message_text("⚠️ 不明なテンプレートです。")
+            return
+
+        # テンプレートプレビューを表示
+        preview = get_template_preview(template_type)
+
+        # プレビューが長い場合は切り詰め
+        if len(preview) > 3500:
+            preview = preview[:3500] + "\n..."
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🚀 この記事を生成する",
+                    callback_data=f"seo:generate:{template_type}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📝 キーワードを指定して生成",
+                    callback_data=f"seo:keyword:{template_type}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔙 テンプレート選択に戻る",
+                    callback_data="seo:back",
+                ),
+            ],
+        ]
+
+        await query.edit_message_text(
+            preview,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "generate":
+        template_type = parts[2] if len(parts) > 2 else ""
+        if template_type not in ("ranking", "howto"):
+            await query.edit_message_text("⚠️ 不明なテンプレートです。")
+            return
+
+        template_name = TEMPLATE_1_INFO['title'] if template_type == 'ranking' else TEMPLATE_2_INFO['title']
+        await query.edit_message_text(
+            f"⏳ 【{template_name}】の記事を生成中...\n\n"
+            "AIが全力エステの情報を埋め込んだ記事ドラフトを作成しています。\n"
+            "少々お待ちください（30秒〜1分程度）。"
+        )
+
+        custom_keyword = context.user_data.pop("seo_custom_keyword", "")
+
+        try:
+            article = await generate_seo_article(template_type, custom_keyword)
+
+            # Telegramメッセージの文字数制限（4096文字）対策
+            header = f"✍️ 【SEO記事ドラフト — {template_name}】\n\n"
+            footer = f"\n\n{'─' * 30}\n{SEO_CHECKLIST}"
+
+            full_text = header + article + footer
+
+            # 長い場合は分割送信
+            if len(full_text) <= 4096:
+                await query.message.chat.send_message(full_text)
+            else:
+                # 記事本文を分割
+                chunks = _split_text(article, 3800)
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await query.message.chat.send_message(header + chunk)
+                    else:
+                        await query.message.chat.send_message(chunk)
+                # チェックリストを最後に送信
+                await query.message.chat.send_message(SEO_CHECKLIST)
+
+            # 再生成・別テンプレートボタン
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "🔄 同じテンプレートで再生成",
+                        callback_data=f"seo:generate:{template_type}",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "📋 別のテンプレートを選ぶ",
+                        callback_data="seo:back",
+                    ),
+                ],
+            ]
+            await query.message.chat.send_message(
+                "👆 生成された記事ドラフトをコピーしてお使いください。",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        except Exception as e:
+            logger.error(f"SEO記事生成エラー: {e}")
+            await query.message.chat.send_message(
+                "❌ 記事の生成に失敗しました。\n\n"
+                "考えられる原因:\n"
+                "• OPENAI_API_KEY が設定されていない\n"
+                "• APIの利用制限に達している\n\n"
+                f"エラー: {str(e)[:200]}",
+                reply_markup=MENU_KEYBOARD,
+            )
+
+    elif action == "keyword":
+        template_type = parts[2] if len(parts) > 2 else ""
+        context.user_data["seo_awaiting_keyword"] = template_type
+
+        await query.edit_message_text(
+            "📝 【キーワード指定】\n\n"
+            "記事に追加で意識したいSEOキーワードを入力してください。\n\n"
+            "例: 「国分町 深夜営業 個室」「初回限定 クーポン」\n\n"
+            "入力後、自動的に記事が生成されます。"
+        )
+
+    elif action == "back":
+        # テンプレート選択に戻る
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    f"{TEMPLATE_1_INFO['emoji']} ランキング紹介風",
+                    callback_data="seo:select:ranking",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    f"{TEMPLATE_2_INFO['emoji']} お悩み解決型ハウツー",
+                    callback_data="seo:select:howto",
+                ),
+            ],
+        ]
+        await query.edit_message_text(
+            "✍️ 【SEO記事作成】\n\n"
+            "テンプレートを選択してください:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
+async def handle_seo_keyword_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """SEOキーワード入力を受け取って記事を生成"""
+    template_type = context.user_data.get("seo_awaiting_keyword")
+    if not template_type:
+        return False
+
+    keyword = update.message.text.strip()
+    context.user_data.pop("seo_awaiting_keyword", None)
+    context.user_data["seo_custom_keyword"] = keyword
+
+    template_name = TEMPLATE_1_INFO['title'] if template_type == 'ranking' else TEMPLATE_2_INFO['title']
+
+    await update.message.reply_text(
+        f"⏳ 【{template_name}】の記事を生成中...\n"
+        f"追加キーワード: {keyword}\n\n"
+        "AIが全力エステの情報を埋め込んだ記事ドラフトを作成しています。\n"
+        "少々お待ちください（30秒〜1分程度）。",
+        reply_markup=MENU_KEYBOARD,
+    )
+
+    try:
+        article = await generate_seo_article(template_type, keyword)
+
+        header = f"✍️ 【SEO記事ドラフト — {template_name}】\n追加キーワード: {keyword}\n\n"
+        footer = f"\n\n{'─' * 30}\n{SEO_CHECKLIST}"
+
+        full_text = header + article + footer
+
+        if len(full_text) <= 4096:
+            await update.message.reply_text(full_text, reply_markup=MENU_KEYBOARD)
+        else:
+            chunks = _split_text(article, 3800)
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await update.message.reply_text(header + chunk)
+                else:
+                    await update.message.reply_text(chunk)
+            await update.message.reply_text(SEO_CHECKLIST, reply_markup=MENU_KEYBOARD)
+
+        # 再生成ボタン
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🔄 同じテンプレートで再生成",
+                    callback_data=f"seo:generate:{template_type}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📋 別のテンプレートを選ぶ",
+                    callback_data="seo:back",
+                ),
+            ],
+        ]
+        await update.message.reply_text(
+            "👆 生成された記事ドラフトをコピーしてお使いください。",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    except Exception as e:
+        logger.error(f"SEO記事生成エラー: {e}")
+        await update.message.reply_text(
+            "❌ 記事の生成に失敗しました。\n"
+            f"エラー: {str(e)[:200]}",
+            reply_markup=MENU_KEYBOARD,
+        )
+
+    return True
+
+
+def _split_text(text: str, max_length: int) -> list:
+    """テキストを指定文字数で分割する（改行で区切る）"""
+    chunks = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > max_length:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = current + "\n" + line if current else line
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 # ─── その他 ──────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """未知のテキストメッセージ"""
     text = update.message.text.strip() if update.message.text else ""
+
+    # SEOキーワード入力待ちの場合
+    if context.user_data.get("seo_awaiting_keyword"):
+        handled = await handle_seo_keyword_input(update, context)
+        if handled:
+            return
 
     # ニューストピック待ちの場合
     if context.user_data.get("awaiting_news_topic"):
@@ -1169,6 +1452,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^📓 写メ日記$"), handle_photo_diary))
     app.add_handler(MessageHandler(filters.Regex(r"^🏢 キャスカン$"), handle_caskan_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🌟 エスたま$"), handle_estama_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^✍️ SEO記事作成$"), handle_seo_menu))
+    app.add_handler(CommandHandler("seo", handle_seo_menu))
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -1181,6 +1466,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
     app.add_handler(CallbackQueryHandler(handle_diary_back_callback, pattern=r"^diary:back$"))
+    app.add_handler(CallbackQueryHandler(handle_seo_callback, pattern=r"^seo:"))
 
     # その他のテキストメッセージ（最後に登録）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
@@ -1191,6 +1477,7 @@ def main() -> None:
             BotCommand("start", "メインメニューを表示"),
             BotCommand("news", "ニュース投稿文面を生成"),
             BotCommand("images", "画像管理"),
+            BotCommand("seo", "SEO記事ドラフトを生成"),
         ])
         logger.info("Telegramコマンドメニューを更新しました")
 
