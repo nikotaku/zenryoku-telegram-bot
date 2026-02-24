@@ -342,19 +342,19 @@ async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     amount = int(amount_str)
     context.user_data["expense_amount"] = amount
 
-    # よく使う内容のクイック選択ボタン
-    quick_buttons = [
-        [KeyboardButton("消耗品"), KeyboardButton("交通費"), KeyboardButton("食費")],
-        [KeyboardButton("広告費"), KeyboardButton("備品"), KeyboardButton("その他")],
+    # 6カテゴリのボタン選択
+    category_buttons = [
+        [KeyboardButton("地代家賃"), KeyboardButton("水道光熱費")],
+        [KeyboardButton("広告宣伝費"), KeyboardButton("備品購入費")],
+        [KeyboardButton("接待交通費"), KeyboardButton("交通費")],
         [KeyboardButton("❌ キャンセル")],
     ]
 
     await update.message.reply_text(
         f"📅 日付: {context.user_data['expense_date']}\n"
         f"💴 金額: ¥{amount:,}\n\n"
-        "📌 内容を入力してください:\n"
-        "（下のボタンから選ぶか、直接入力してください）",
-        reply_markup=ReplyKeyboardMarkup(quick_buttons, resize_keyboard=True, one_time_keyboard=True),
+        "📌 内容を選んでください:",
+        reply_markup=ReplyKeyboardMarkup(category_buttons, resize_keyboard=True, one_time_keyboard=True),
     )
     return EXPENSE_CONTENT
 
@@ -366,6 +366,21 @@ async def expense_content(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if text == "❌ キャンセル":
         await update.message.reply_text("❌ 経費入力をキャンセルしました。", reply_markup=MENU_KEYBOARD)
         return ConversationHandler.END
+
+    # 有効なカテゴリのみ受け付ける
+    valid_categories = ["地代家賃", "水道光熱費", "広告宣伝費", "備品購入費", "接待交通費", "交通費"]
+    if text not in valid_categories:
+        category_buttons = [
+            [KeyboardButton("地代家賃"), KeyboardButton("水道光熱費")],
+            [KeyboardButton("広告宣伝費"), KeyboardButton("備品購入費")],
+            [KeyboardButton("接待交通費"), KeyboardButton("交通費")],
+            [KeyboardButton("❌ キャンセル")],
+        ]
+        await update.message.reply_text(
+            "⚠️ 下のボタンから選んでください:",
+            reply_markup=ReplyKeyboardMarkup(category_buttons, resize_keyboard=True, one_time_keyboard=True),
+        )
+        return EXPENSE_CONTENT
 
     context.user_data["expense_content"] = text
 
