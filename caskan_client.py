@@ -7,7 +7,8 @@ import re
 import logging
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta, date as date_type
+import calendar
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,131 @@ class CaskanClient:
 
         except Exception as e:
             logger.error(f"予約取得エラー: {e}")
+            return {"error": str(e)}
+
+    def get_room_map(self) -> dict:
+        """ルームIDとルーム名のマッピングを取得"""
+        if not self._ensure_login():
+            return {}
+        try:
+            resp = self.session.get(f"{BASE_URL}/room", timeout=15)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            room_map = {}
+            inputs = soup.find_all("input", {"name": re.compile(r"^sort\[")})
+            for inp in inputs:
+                room_id = inp.get("value", "")
+                tr = inp.find_parent("tr")
+                if tr:
+                    link = tr.find("a", href=re.compile(r"/room/view"))
+                    if link:
+                        room_name = link.get_text(separator=" ", strip=True).split()[0]
+                        room_map[room_id] = room_name
+            return room_map
+        except Exception as e:
+            logger.error(f"ルームマップ取得エラー: {e}")
+            return {}
+
+    def get_monthly_shift(self, year: int, month: int) -> dict:
+        """
+        指定月のシフト情報とルーム空き状況を取得して月カレンダー形式で返す。
+
+        Returns:
+            {
+                'year': int,
+                'month': int,
+                'room_map': {room_id: room_name},
+                'days': {
+                    'YYYY-MM-DD': {
+                        'weekday': '月',
+                        'shifts': [
+                            {'name': str, 'time': str, 'room_id': str, 'room_name': str}
+                        ],
+                        'rooms_used': [room_id, ...],
+                    }
+                }
+            }
+        """
+        if not self._ensure_login():
+            return {"error": "ログインに失敗しました"}
+
+        try:
+            room_map = self.get_room_map()
+            # 月の最初の日と最後の日を計算
+            first_day = date_type(year, month, 1)
+            last_day = date_type(year, month, calendar.monthrange(year, month)[1])
+
+            # 週ごとにシフト表を取得（7日単位）
+            all_shifts: dict = {}  # date_str -> list of shifts
+            current = first_day
+            fetched_weeks = set()
+
+            while current <= last_day:
+                week_key = current.strftime("%Y-%m-%d")
+                if week_key not in fetched_weeks:
+                    fetched_weeks.add(week_key)
+                    resp = self.session.get(
+                        f"{BASE_URL}/shift/view?start_day={week_key}",
+                        timeout=15,
+                    )
+                    soup = BeautifulSoup(resp.text, "html.parser")
+
+                    # parts-cast-table からシフト情報を抽出
+                    cast_tables = soup.find_all("table", class_="parts-cast-table")
+                    for ct in cast_tables:
+                        for row in ct.find_all("tr"):
+                            td = row.find("td")
+                            if not td:
+                                continue
+                            divs = td.find_all("div")
+                            name = divs[0].get_text(strip=True) if divs else ""
+                            time_str = divs[1].get_text(strip=True) if len(divs) > 1 else ""
+                            edit_span = td.find("span", {"data-room-id": True})
+                            if not edit_span:
+                                continue
+                            room_id = edit_span.get("data-room-id", "")
+                            day_str = edit_span.get("data-day", "")
+                            if not day_str or not name:
+                                continue
+                            # 対象月のみ記録
+                            try:
+                                d = datetime.strptime(day_str, "%Y-%m-%d").date()
+                            except ValueError:
+                                continue
+                            if d.year == year and d.month == month:
+                                if day_str not in all_shifts:
+                                    all_shifts[day_str] = []
+                                all_shifts[day_str].append({
+                                    "name": name,
+                                    "time": time_str,
+                                    "room_id": room_id,
+                                    "room_name": room_map.get(room_id, f"Room{room_id}"),
+                                })
+                current += timedelta(days=7)
+
+            # 月の全日付を埋める
+            weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+            days = {}
+            d = first_day
+            while d <= last_day:
+                day_str = d.strftime("%Y-%m-%d")
+                shifts = all_shifts.get(day_str, [])
+                rooms_used = list({s["room_id"] for s in shifts})
+                days[day_str] = {
+                    "weekday": weekday_names[d.weekday()],
+                    "shifts": shifts,
+                    "rooms_used": rooms_used,
+                }
+                d += timedelta(days=1)
+
+            return {
+                "year": year,
+                "month": month,
+                "room_map": room_map,
+                "days": days,
+            }
+
+        except Exception as e:
+            logger.error(f"月シフト取得エラー: {e}")
             return {"error": str(e)}
 
     def get_cast_list(self) -> list:

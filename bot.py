@@ -517,10 +517,21 @@ async def expense_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ─── 🏪 キャスカン ハブ ──────────────────────────────────
 async def handle_caskan_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """キャスカンメニュー"""
+    from datetime import datetime
+    now = datetime.now()
+    this_month = f"{now.year}-{now.month:02d}"
+    next_month_year = now.year if now.month < 12 else now.year + 1
+    next_month_num = now.month + 1 if now.month < 12 else 1
+    next_month = f"{next_month_year}-{next_month_num:02d}"
+
     keyboard = [
         [
             InlineKeyboardButton("📊 売上確認", callback_data="caskan:sales"),
             InlineKeyboardButton("📅 スケジュール", callback_data="caskan:schedule"),
+        ],
+        [
+            InlineKeyboardButton(f"🗓 {now.month}月カレンダー", callback_data=f"caskan:calendar:{this_month}"),
+            InlineKeyboardButton(f"🗓 {next_month_num}月カレンダー", callback_data=f"caskan:calendar:{next_month}"),
         ],
         [
             InlineKeyboardButton("📋 予約一覧", callback_data="caskan:reservations"),
@@ -536,7 +547,7 @@ async def handle_caskan_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "🏪 【キャスカン ハブ】\n\n"
+        "🏦 【キャスカン ハブ】\n\n"
         "キャスカン管理画面の情報を確認できます。\n"
         "操作を選択してください:",
         reply_markup=reply_markup,
@@ -631,6 +642,144 @@ async def handle_caskan_callback(update: Update, context: ContextTypes.DEFAULT_T
             text = text[:4000] + "\n..."
 
         await query.edit_message_text(text)
+
+    elif action.startswith("calendar:"):
+        # caskan:calendar:YYYY-MM
+        ym = action.replace("calendar:", "")
+        try:
+            year, month = int(ym.split("-")[0]), int(ym.split("-")[1])
+        except (ValueError, IndexError):
+            await query.edit_message_text("❌ 日付形式エラー")
+            return
+
+        await query.edit_message_text(f"⏳ {year}年{month}月のシフト・ルーム情報を取得中...\n(数分かかる場合があります)")
+
+        data_monthly = caskan.get_monthly_shift(year, month)
+        if "error" in data_monthly:
+            await query.edit_message_text(f"❌ エラー: {data_monthly['error']}")
+            return
+
+        room_map = data_monthly.get("room_map", {})
+        days = data_monthly.get("days", {})
+        all_room_ids = list(room_map.keys())
+
+        # ルーム名の略称マッピング（表示用）
+        room_abbr = {}
+        for rid, rname in room_map.items():
+            # 「インroom」→「イン」、「ラズroom」→「ラズ」、「サンroom」→「サン」
+            abbr = rname.replace("room", "").replace("Room", "").strip()
+            room_abbr[rid] = abbr
+
+        # カレンダーテキストを構築
+        import calendar as cal_mod
+        lines = []
+        lines.append(f"🗓 【{year}年{month}月 シフト・ルーム空き】")
+        lines.append("")
+
+        # ルーム一覧表示
+        room_legend = " / ".join([f"{room_abbr.get(rid, rid)}={rname}" for rid, rname in room_map.items()])
+        lines.append(f"🏠 ルーム: {room_legend}")
+        lines.append("")
+
+        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+        day_emojis = {"月": "", "火": "", "水": "", "木": "", "金": "", "土": "🟦", "日": "🟥"}
+
+        for day_str in sorted(days.keys()):
+            info = days[day_str]
+            wd = info["weekday"]
+            day_num = int(day_str.split("-")[2])
+            shifts = info["shifts"]
+            rooms_used = set(info["rooms_used"])
+
+            # ルーム空き状況アイコン
+            room_status_parts = []
+            for rid in all_room_ids:
+                rname = room_abbr.get(rid, rid)
+                if rid in rooms_used:
+                    room_status_parts.append(f"❌{rname}")
+                else:
+                    room_status_parts.append(f"✅{rname}")
+            room_status = " ".join(room_status_parts)
+
+            # 出勤セラピスト
+            if shifts:
+                cast_parts = []
+                for s in shifts:
+                    abbr = room_abbr.get(s["room_id"], s["room_id"])
+                    cast_parts.append(f"{s['name']}({abbr})")
+                cast_str = " ".join(cast_parts)
+            else:
+                cast_str = "オフ"
+
+            day_emoji = day_emojis.get(wd, "")
+            lines.append(f"{day_emoji}{day_num}日({wd}) {room_status}")
+            if shifts:
+                lines.append(f"  ↳ {cast_str}")
+
+        text = "\n".join(lines)
+
+        # 前月・翌月ナビゲーションボタン
+        prev_year = year if month > 1 else year - 1
+        prev_month = month - 1 if month > 1 else 12
+        next_year = year if month < 12 else year + 1
+        next_month_n = month + 1 if month < 12 else 1
+
+        nav_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    f"◀ {prev_month}月",
+                    callback_data=f"caskan:calendar:{prev_year}-{prev_month:02d}"
+                ),
+                InlineKeyboardButton(
+                    f"{next_month_n}月 ▶",
+                    callback_data=f"caskan:calendar:{next_year}-{next_month_n:02d}"
+                ),
+            ],
+            [
+                InlineKeyboardButton("🔙 キャスカンメニューに戻る", callback_data="caskan:back_menu"),
+            ],
+        ])
+
+        if len(text) > 4000:
+            text = text[:4000] + "\n..."
+
+        await query.edit_message_text(text, reply_markup=nav_keyboard)
+
+    elif action == "back_menu":
+        # キャスカンメニューに戻る（インラインキーボードを再表示）
+        from datetime import datetime
+        now = datetime.now()
+        this_month = f"{now.year}-{now.month:02d}"
+        next_month_year = now.year if now.month < 12 else now.year + 1
+        next_month_num = now.month + 1 if now.month < 12 else 1
+        next_month = f"{next_month_year}-{next_month_num:02d}"
+
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 売上確認", callback_data="caskan:sales"),
+                InlineKeyboardButton("📅 スケジュール", callback_data="caskan:schedule"),
+            ],
+            [
+                InlineKeyboardButton(f"🗓 {now.month}月カレンダー", callback_data=f"caskan:calendar:{this_month}"),
+                InlineKeyboardButton(f"🗓 {next_month_num}月カレンダー", callback_data=f"caskan:calendar:{next_month}"),
+            ],
+            [
+                InlineKeyboardButton("📋 予約一覧", callback_data="caskan:reservations"),
+                InlineKeyboardButton("👥 キャスト一覧", callback_data="caskan:casts"),
+            ],
+            [
+                InlineKeyboardButton("🏠 ホーム情報", callback_data="caskan:home"),
+            ],
+            [
+                InlineKeyboardButton("🔗 管理画面を開く", url="https://my.caskan.jp/"),
+            ],
+        ]
+        await query.edit_message_text(
+            "🏦 【キャスカン ハブ】\n\n"
+            "キャスカン管理画面の情報を確認できます。\n"
+            "操作を選択してください:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
 
 # ─── 🌟 エスたま ハブ ────────────────────────────────────
