@@ -84,8 +84,8 @@ EXPENSE_DATE, EXPENSE_AMOUNT, EXPENSE_CONTENT, EXPENSE_MEMO = range(4)
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
-        [KeyboardButton("💴 経費を入力"), KeyboardButton("🏪 キャスカン")],
-        [KeyboardButton("🌟 エスたま")],
+        [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
+        [KeyboardButton("🏢 キャスカン"), KeyboardButton("🌟 エスたま")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -108,7 +108,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📰 ニュース生成 — エスたま用のニュース文面を作成\n"
         "📸 画像管理 — セラピストのNotionページに写真を保存\n"
         "💴 経費を入力 — 経費をNotionに記録\n"
-        "🏦 キャスカン — 売上・スケジュール確認\n"
+        "📓 写メ日記 — テンプレートをコピーして使える\n"
+        "🏢 キャスカン — 売上・スケジュール確認\n"
         "🌟 エスたま — ご案内状況・アピール"
     )
     # リプライキーボード（ボタンメニュー）を送信
@@ -279,6 +280,180 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
             f"❌ Notionへの保存に失敗しました。\n"
             f"NOTION_API_KEY が正しく設定されているか確認してください。"
         )
+
+
+# ─── 写メ日記テンプレート ────────────────────────────────
+# Notionから取得した8種のテンプレートをハードコード（高速表示のため）
+PHOTO_DIARY_TEMPLATES = [
+    {
+        "id": "1",
+        "title": "1️⃣ お礼日記（新規・リピーター向け）",
+        "short": "○○さん、ありがとうございました",
+        "text": (
+            "○○さん、本日はご来店ありがとうございました\n"
+            "初めてで緊張したと思いますが、最後はリラックスした表情を見られて嬉しかったです\n"
+            "お仕事の話、とても興味深かったです！また色々聞かせてくださいね\n"
+            "寒いので暖かくして休んでください。またお会いできるのを楽しみにしています"
+        ),
+    },
+    {
+        "id": "2",
+        "title": "2️⃣ 出勤告知",
+        "short": "本日出勤します 会いに来てね",
+        "text": (
+            "こんにちは！○○です\n"
+            "本日《18:00〜24:00》で出勤します！\n"
+            "急に寒くなりましたね…人肌恋しい季節、○○が心を込めて温めます\n"
+            "お仕事で疲れた心と体を癒しに来てくださいね。\n"
+            "ご予約お待ちしております"
+        ),
+    },
+    {
+        "id": "3",
+        "title": "3️⃣ 自己紹介（新人向け）",
+        "short": "はじめまして！新人セラピストの○○です",
+        "text": (
+            "はじめまして！\n"
+            "この度、○○（店名）でお世話になることになりました、新人の○○です\n"
+            "マッサージは勉強中ですが、お客様に癒しをお届けしたい気持ちは誰にも負けません！\n"
+            "趣味はアニメを見ることで、休日は一日中見ています(笑)\n"
+            "おすすめのアニメがあったらぜひ教えてください\n"
+            "緊張でガチガチかもしれませんが、優しくしていただけると嬉しいです\n"
+            "皆様にお会いできるのを楽しみにしています！"
+        ),
+    },
+    {
+        "id": "4",
+        "title": "4️⃣ 日常投稿（親近感UP）",
+        "short": "最近ハマってること",
+        "text": (
+            "お疲れ様です、○○です\n"
+            "最近、○○にハマっていて、昨日も食べちゃいました\n"
+            "本当に美味しくて、毎日でも食べたいくらい…！\n"
+            "皆さんの最近のマイブームは何ですか？\n"
+            "今度お店に来た時に、ぜひ教えてくださいね"
+        ),
+    },
+    {
+        "id": "5",
+        "title": "5️⃣ クーポン告知（店舗型）",
+        "short": "エス魂限定！特別クーポン",
+        "text": (
+            "ご覧いただきましてありがとうございます\n"
+            "1万円以内で厳選されたセラピストと夢のような癒しのひとときをお過ごし頂けます\n\n"
+            "オトクなクーポン情報\n"
+            "【お得に70分お試しコース】\n"
+            "通常60分 10,000円 → 70分 10,000円（時間延長）\n\n"
+            "ご利用条件：予約時にエステ魂のクーポン利用とお伝えください\n\n"
+            "店名：○○\n"
+            "営業時間：○○\n"
+            "電話番号：○○"
+        ),
+    },
+    {
+        "id": "6",
+        "title": "6️⃣ 癒されたいお客様向けお礼",
+        "short": "今日もありがとう",
+        "text": (
+            "今日もありがとう\n"
+            '"癒された"って言ってもらえて嬉しかったよ。\n'
+            "また疲れたらいつでも来てね"
+        ),
+    },
+    {
+        "id": "7",
+        "title": "7️⃣ 話が盛り上がった時のお礼",
+        "short": "今日はありがとう",
+        "text": (
+            "今日はありがとう\n"
+            "いっぱい笑って楽しかったね\n"
+            "あっという間だった～ また会おうね。"
+        ),
+    },
+    {
+        "id": "8",
+        "title": "8️⃣ 久しぶりに会えた時のお礼",
+        "short": "久しぶりにありがとう",
+        "text": (
+            "今日はありがとう\n"
+            "久しぶりに会えて嬉しかったよ\n"
+            "また間あかないうちに会えたらいいな。"
+        ),
+    },
+]
+
+
+async def handle_photo_diary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """📓 写メ日記ボタン — テンプレート一覧を表示"""
+    keyboard = []
+    for tmpl in PHOTO_DIARY_TEMPLATES:
+        keyboard.append([
+            InlineKeyboardButton(
+                tmpl["title"],
+                callback_data=f"diary:{tmpl['id']}"
+            )
+        ])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "📓 【写メ日記テンプレート集】\n\n"
+        "エスたまランキング上位店舗を分析した8種のテンプレートです。\n"
+        "使いたいテンプレートをタップしてください。",
+        reply_markup=reply_markup,
+    )
+
+
+async def handle_diary_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """写メ日記テンプレート選択コールバック"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("diary:"):
+        return
+
+    tmpl_id = data.replace("diary:", "")
+    tmpl = next((t for t in PHOTO_DIARY_TEMPLATES if t["id"] == tmpl_id), None)
+    if not tmpl:
+        await query.edit_message_text("⚠️ テンプレートが見つかりません。")
+        return
+
+    # テンプレート本文を送信（コピーしやすいようにコードブロックなし・プレーンテキスト）
+    text = (
+        f"{tmpl['title']}\n"
+        f"タイトル例: {tmpl['short']}\n"
+        f"{'─' * 20}\n"
+        f"{tmpl['text']}\n"
+        f"{'─' * 20}\n"
+        "⬆️ 上の文面をコピーしてお使いください。"
+    )
+
+    # 戻るボタン付き
+    back_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 テンプレート一覧に戻る", callback_data="diary:back")]
+    ])
+    await query.edit_message_text(text, reply_markup=back_keyboard)
+
+
+async def handle_diary_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """写メ日記テンプレート一覧に戻る"""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = []
+    for tmpl in PHOTO_DIARY_TEMPLATES:
+        keyboard.append([
+            InlineKeyboardButton(
+                tmpl["title"],
+                callback_data=f"diary:{tmpl['id']}"
+            )
+        ])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        "📓 【写メ日記テンプレート集】\n\n"
+        "エスたまランキング上位店舗を分析した8種のテンプレートです。\n"
+        "使いたいテンプレートをタップしてください。",
+        reply_markup=reply_markup,
+    )
 
 
 # ─── /expense コマンド（経費入力） ───────────────────────
@@ -991,7 +1166,8 @@ def main() -> None:
     # メニューボタン — テキストメッセージ
     app.add_handler(MessageHandler(filters.Regex(r"^📰 ニュース生成$"), handle_news))
     app.add_handler(MessageHandler(filters.Regex(r"^📸 画像管理$"), handle_images))
-    app.add_handler(MessageHandler(filters.Regex(r"^🏪 キャスカン$"), handle_caskan_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^📓 写メ日記$"), handle_photo_diary))
+    app.add_handler(MessageHandler(filters.Regex(r"^🏢 キャスカン$"), handle_caskan_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🌟 エスたま$"), handle_estama_menu))
 
     # 画像メッセージ — 写真管理
@@ -1003,6 +1179,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_estama_callback, pattern=r"^estama:"))
     app.add_handler(CallbackQueryHandler(handle_estama_confirm_callback, pattern=r"^estama_confirm:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
+    app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
+    app.add_handler(CallbackQueryHandler(handle_diary_back_callback, pattern=r"^diary:back$"))
 
     # その他のテキストメッセージ（最後に登録）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
