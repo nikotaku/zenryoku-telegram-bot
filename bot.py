@@ -659,64 +659,9 @@ async def handle_caskan_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(f"❌ エラー: {data_monthly['error']}")
             return
 
-        room_map = data_monthly.get("room_map", {})
-        days = data_monthly.get("days", {})
-        all_room_ids = list(room_map.keys())
-
-        # ルーム名の略称マッピング（表示用）
-        room_abbr = {}
-        for rid, rname in room_map.items():
-            # 「インroom」→「イン」、「ラズroom」→「ラズ」、「サンroom」→「サン」
-            abbr = rname.replace("room", "").replace("Room", "").strip()
-            room_abbr[rid] = abbr
-
-        # カレンダーテキストを構築
-        import calendar as cal_mod
-        lines = []
-        lines.append(f"🗓 【{year}年{month}月 シフト・ルーム空き】")
-        lines.append("")
-
-        # ルーム一覧表示
-        room_legend = " / ".join([f"{room_abbr.get(rid, rid)}={rname}" for rid, rname in room_map.items()])
-        lines.append(f"🏠 ルーム: {room_legend}")
-        lines.append("")
-
-        weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
-        day_emojis = {"月": "", "火": "", "水": "", "木": "", "金": "", "土": "🟦", "日": "🟥"}
-
-        for day_str in sorted(days.keys()):
-            info = days[day_str]
-            wd = info["weekday"]
-            day_num = int(day_str.split("-")[2])
-            shifts = info["shifts"]
-            rooms_used = set(info["rooms_used"])
-
-            # ルーム空き状況アイコン
-            room_status_parts = []
-            for rid in all_room_ids:
-                rname = room_abbr.get(rid, rid)
-                if rid in rooms_used:
-                    room_status_parts.append(f"❌{rname}")
-                else:
-                    room_status_parts.append(f"✅{rname}")
-            room_status = " ".join(room_status_parts)
-
-            # 出勤セラピスト
-            if shifts:
-                cast_parts = []
-                for s in shifts:
-                    abbr = room_abbr.get(s["room_id"], s["room_id"])
-                    cast_parts.append(f"{s['name']}({abbr})")
-                cast_str = " ".join(cast_parts)
-            else:
-                cast_str = "オフ"
-
-            day_emoji = day_emojis.get(wd, "")
-            lines.append(f"{day_emoji}{day_num}日({wd}) {room_status}")
-            if shifts:
-                lines.append(f"  ↳ {cast_str}")
-
-        text = "\n".join(lines)
+        # カレンダー画像を生成
+        from calendar_image import generate_calendar_image
+        img_buf = generate_calendar_image(data_monthly)
 
         # 前月・翌月ナビゲーションボタン
         prev_year = year if month > 1 else year - 1
@@ -740,10 +685,14 @@ async def handle_caskan_callback(update: Update, context: ContextTypes.DEFAULT_T
             ],
         ])
 
-        if len(text) > 4000:
-            text = text[:4000] + "\n..."
-
-        await query.edit_message_text(text, reply_markup=nav_keyboard)
+        # 画像を新規メッセージとして送信（edit_messageでは画像送信不可のため、元メッセージを削除して新規送信）
+        from telegram import InputFile
+        await query.delete_message()
+        await query.message.chat.send_photo(
+            photo=img_buf,
+            caption=f"🗓 {year}年{month}月 シフト・ルーム空き状況",
+            reply_markup=nav_keyboard,
+        )
 
     elif action == "back_menu":
         # キャスカンメニューに戻る（インラインキーボードを再表示）
