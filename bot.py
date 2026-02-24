@@ -91,8 +91,15 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
     one_time_keyboard=False,
 )
 
+# Notion セラピストDB URL
+NOTION_THERAPIST_DB_URL = "https://www.notion.so/20af9507f0cf811a9397000b1fd6918d"
 
-# ─── /start コマンド ─────────────────────────────────────
+# Notionリンクボタン付きメインメニュー
+MENU_INLINE_KEYBOARD = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🗒 Notion セラピスト一覧", url=NOTION_THERAPIST_DB_URL)],
+])
+
+# ─── /start コマンド ───────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """メインメニューを表示する"""
     welcome_text = (
@@ -101,10 +108,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📰 ニュース生成 — エスたま用のニュース文面を作成\n"
         "📸 画像管理 — セラピストのNotionページに写真を保存\n"
         "💴 経費を入力 — 経費をNotionに記録\n"
-        "🏪 キャスカン — 売上・スケジュール確認\n"
+        "🏦 キャスカン — 売上・スケジュール確認\n"
         "🌟 エスたま — ご案内状況・アピール"
     )
+    # リプライキーボード（ボタンメニュー）を送信
     await update.message.reply_text(welcome_text, reply_markup=MENU_KEYBOARD)
+    # Notionセラピスト一覧のインラインリンクボタンを別メッセージで送信
+    await update.message.reply_text(
+        "🗒 Notionのセラピスト一覧は下のボタンから開けます:",
+        reply_markup=MENU_INLINE_KEYBOARD,
+    )
 
 
 # ─── /news コマンド ─────────────────────────────────────
