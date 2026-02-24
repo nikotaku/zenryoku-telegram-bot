@@ -8,9 +8,33 @@ import calendar
 from datetime import date as date_type
 from PIL import Image, ImageDraw, ImageFont
 
-# フォントパス
-FONT_PATH = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-FONT_BOLD_PATH = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+# フォントパス（複数の候補を試す）
+import os
+
+def _find_font(bold: bool = False) -> str:
+    """利用可能な日本語フォントパスを返す"""
+    candidates = []
+    if bold:
+        candidates = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Bold.otf",
+        ]
+    else:
+        candidates = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+        ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None  # フォールバック: デフォルトフォント使用
+
+FONT_PATH = _find_font(bold=False)
+FONT_BOLD_PATH = _find_font(bold=True)
 
 # カラーパレット
 COLOR_BG = (245, 247, 250)          # 背景
@@ -51,6 +75,9 @@ COLS = 7           # 列数（月〜日）
 
 def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     path = FONT_BOLD_PATH if bold else FONT_PATH
+    if path is None:
+        # 日本語フォントが見つからない場合はデフォルトフォントを使用
+        return ImageFont.load_default()
     try:
         return ImageFont.truetype(path, size)
     except Exception:
