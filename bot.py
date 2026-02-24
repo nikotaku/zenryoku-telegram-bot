@@ -20,6 +20,7 @@ from telegram import (
     KeyboardButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    BotCommand,
 )
 from telegram.ext import (
     Application,
@@ -879,6 +880,17 @@ def main() -> None:
 
     # その他のテキストメッセージ（最後に登録）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
+
+    # 起動時にTelegramコマンドメニューを更新
+    async def post_init(application: Application) -> None:
+        await application.bot.set_my_commands([
+            BotCommand("start", "メインメニューを表示"),
+            BotCommand("news", "ニュース投稿文面を生成"),
+            BotCommand("images", "画像管理"),
+        ])
+        logger.info("Telegramコマンドメニューを更新しました")
+
+    app.post_init = post_init
 
     # ポーリング開始
     logger.info("全力エステBot を起動しました。Ctrl+C で停止します。")
