@@ -1,10 +1,11 @@
 """
-Notion API クライアント — セラピスト情報の取得・写真アップロード
+Notion API クライアント — セラピスト情報の取得・写真アップロード・経費記録
 """
 
 import os
 import logging
 import requests
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,9 @@ NOTION_VERSION = "2022-06-28"
 
 # マスタDB data_source_id
 MASTER_DB_ID = os.environ.get("NOTION_MASTER_DB_ID", "20af9507-f0cf-811a-9397-000b1fd6918d")
+
+# 経費記録ページID
+EXPENSE_PAGE_ID = os.environ.get("NOTION_EXPENSE_PAGE_ID", "311f9507-f0cf-818a-bfef-df41adcd943c")
 
 # セラピスト一覧（源氏名 → Notion ページID）
 # 環境変数 THERAPIST_MAP で上書き可能（JSON形式）
@@ -124,3 +128,78 @@ def get_page_title(page_id: str) -> str:
         return "不明"
     except Exception:
         return "不明"
+
+
+def append_expense_to_page(
+    date: str,
+    amount: int,
+    content: str,
+    memo: str = "",
+) -> bool:
+    """
+    経費記録ページに経費エントリを追加する
+
+    Args:
+        date: 日付文字列（例: "2026-02-24"）
+        amount: 金額（整数、円）
+        content: 内容・カテゴリ
+        memo: メモ（任意）
+
+    Returns:
+        成功したら True
+    """
+    if not NOTION_API_KEY:
+        logger.error("NOTION_API_KEY が設定されていません")
+        return False
+
+    page_id = EXPENSE_PAGE_ID
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+
+    # 記録日時
+    recorded_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # 金額を3桁区切りでフォーマット
+    amount_str = f"¥{amount:,}"
+
+    # メモ行（あれば）
+    memo_line = f"\n　📝 メモ: {memo}" if memo else ""
+
+    # 区切り線 + 経費エントリブロック
+    blocks = [
+        {
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": (
+                                f"📅 {date}　　💴 {amount_str}\n"
+                                f"📌 {content}"
+                                f"{memo_line}\n"
+                                f"🕐 記録: {recorded_at}"
+                            )
+                        },
+                        "annotations": {}
+                    }
+                ],
+                "icon": {"type": "emoji", "emoji": "💰"},
+                "color": "yellow_background"
+            }
+        }
+    ]
+
+    payload = {"children": blocks}
+
+    try:
+        resp = requests.patch(url, json=payload, headers=_headers(), timeout=30)
+        if resp.status_code == 200:
+            logger.info(f"経費をNotionページ {page_id} に追加しました: {date} {amount_str} {content}")
+            return True
+        else:
+            logger.error(f"Notion API エラー: {resp.status_code} - {resp.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Notion API 接続エラー: {e}")
+        return False
