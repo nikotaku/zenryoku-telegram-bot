@@ -38,6 +38,7 @@ from notion_client import (
     append_expense_to_page,
     EXPENSE_PAGE_ID,
 )
+from sheets_client import append_expense_to_sheet
 from image_uploader import upload_telegram_photo
 from seo_article import (
     generate_seo_article,
@@ -423,7 +424,7 @@ async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     await update.message.reply_text(
         "💴 【経費入力】\n\n"
-        "Notionの経費管理ページに記録します。\n"
+        "Notionの経費管理ページおよびGoogleスプレッドシートに記録します。\n"
         "まず、日付を入力してください（例: 2026-03-20）",
         reply_markup=reply_markup,
     )
@@ -564,7 +565,7 @@ async def expense_memo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if memo:
         confirm_text += f"📝 メモ: {memo}\n"
 
-    confirm_text += "\nNotionに保存しますか？"
+    confirm_text += "\nNotionおよびGoogleスプレッドシートに保存しますか？"
 
     # 確認ボタン
     keyboard = [
@@ -607,31 +608,54 @@ async def expense_confirm_callback(update: Update, context: ContextTypes.DEFAULT
     content = context.user_data.get("expense_content", "")
     memo = context.user_data.get("expense_memo", "")
 
-    await query.edit_message_text("⏳ Notionに経費を保存中...")
+    await query.edit_message_text("⏳ NotionおよびGoogleスプレッドシートに経費を保存中...")
 
-    success = append_expense_to_page(
+    # Notionに保存
+    notion_success = append_expense_to_page(
         date=date_str,
         amount=amount,
         content=content,
         memo=memo,
     )
 
-    if success:
+    # Googleスプレッドシートに保存
+    sheet_success = append_expense_to_sheet(
+        date=date_str,
+        amount=amount,
+        content=content,
+        memo=memo,
+    )
+
+    if notion_success or sheet_success:
         # コンテキストをクリア
         for key in ("expense_date", "expense_amount", "expense_content", "expense_memo"):
             context.user_data.pop(key, None)
+
+        # 保存先のステータスを構築
+        save_status_parts = []
+        if notion_success:
+            save_status_parts.append(f"📎 Notion: https://www.notion.so/{EXPENSE_PAGE_ID.replace('-', '')}")
+        else:
+            save_status_parts.append("⚠️ Notion: 保存失敗")
+        if sheet_success:
+            save_status_parts.append("📊 Googleスプレッドシート: 保存完了")
+        else:
+            save_status_parts.append("⚠️ Googleスプレッドシート: 保存失敗")
 
         await query.edit_message_text(
             f"✅ 経費を記録しました！\n\n"
             f"📅 {date_str}　💴 ¥{amount:,}\n"
             f"📌 {content}"
             + (f"\n📝 {memo}" if memo else "")
-            + f"\n\n📎 Notion: https://www.notion.so/{EXPENSE_PAGE_ID.replace('-', '')}"
+            + "\n\n"
+            + "\n".join(save_status_parts)
         )
     else:
         await query.edit_message_text(
-            "❌ Notionへの保存に失敗しました。\n"
-            "NOTION_API_KEY が正しく設定されているか確認してください。"
+            "❌ 保存に失敗しました。\n\n"
+            "『Notion』: NOTION_API_KEY が正しく設定されているか確認してください。\n"
+            "『Googleスプレッドシート』: GOOGLE_SERVICE_ACCOUNT_JSON または "
+            "GOOGLE_APPLICATION_CREDENTIALS が正しく設定されているか確認してください。"
         )
 
 
