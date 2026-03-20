@@ -6,8 +6,6 @@
   - /news   : ニュース投稿文面を生成
   - /images : 画像管理（セラピスト写真をNotionに保存）
   - /expense: 経費を入力してNotionに記録
-  - 🏪 キャスカン ハブ（売上・スケジュール・予約確認）
-  - 🌟 エスたま ハブ（ダッシュボード・ご案内状況・アピール）
 """
 
 import os
@@ -41,8 +39,6 @@ from notion_client import (
     EXPENSE_PAGE_ID,
 )
 from image_uploader import upload_telegram_photo
-from caskan_client import CaskanClient
-from estama_client import EstamaClient
 from seo_article import (
     generate_seo_article,
     get_template_preview,
@@ -66,24 +62,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# クライアントインスタンス（遅延初期化）
-_caskan_client = None
-_estama_client = None
-
-
-def get_caskan():
-    global _caskan_client
-    if _caskan_client is None:
-        _caskan_client = CaskanClient()
-    return _caskan_client
-
-
-def get_estama():
-    global _estama_client
-    if _estama_client is None:
-        _estama_client = EstamaClient()
-    return _estama_client
-
 
 # ─── 経費入力 ConversationHandler ステート ────────────────
 EXPENSE_DATE, EXPENSE_AMOUNT, EXPENSE_CONTENT, EXPENSE_MEMO = range(4)
@@ -95,7 +73,6 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
         [KeyboardButton("✍️ SEO記事作成")],
-        [KeyboardButton("🏢 キャスカン"), KeyboardButton("🌟 エスたま")],
         [KeyboardButton("🤖 エージェント")],
     ],
     resize_keyboard=True,
@@ -345,123 +322,110 @@ PHOTO_DIARY_TEMPLATES = [
     {
         "id": "6",
         "title": "6️⃣ 癒されたいお客様向けお礼",
-        "short": "今日もありがとう",
+        "short": "今日もありがとうございました",
         "text": (
-            "今日もありがとう\n"
-            '"癒された"って言ってもらえて嬉しかったよ。\n'
-            "また疲れたらいつでも来てね"
+            "今日もありがとうございました！\n"
+            "○○さんの笑顔に、私の方が癒されちゃいました(笑)\n"
+            "またいつでもリフレッシュしに来てくださいね！\n"
+            "心よりお待ちしております"
         ),
     },
     {
         "id": "7",
-        "title": "7️⃣ 話が盛り上がった時のお礼",
-        "short": "今日はありがとう",
+        "title": "7️⃣ おやすみ日記",
+        "short": "今日はゆっくり休みます",
         "text": (
-            "今日はありがとう\n"
-            "いっぱい笑って楽しかったね\n"
-            "あっという間だった～ また会おうね。"
+            "お疲れ様です、○○です！\n"
+            "今日は一日お休みをいただいています。\n"
+            "明日からまた元気に頑張りますので、ぜひ会いに来てくださいね！\n"
+            "皆様も良い夜をお過ごしください"
         ),
     },
     {
         "id": "8",
-        "title": "8️⃣ 久しぶりに会えた時のお礼",
-        "short": "久しぶりにありがとう",
+        "title": "8️⃣ 出勤前の一言",
+        "short": "もうすぐ出勤です！",
         "text": (
-            "今日はありがとう\n"
-            "久しぶりに会えて嬉しかったよ\n"
-            "また間あかないうちに会えたらいいな。"
+            "皆様こんにちは、○○です！\n"
+            "もうすぐ出勤します。今日も一日、心を込めて皆様を癒します！\n"
+            "ぜひお立ち寄りください。お待ちしております！"
         ),
     },
 ]
 
 
 async def handle_photo_diary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """📓 写メ日記ボタン — テンプレート一覧を表示"""
+    """写メ日記テンプレートメニューを表示"""
     keyboard = []
-    for tmpl in PHOTO_DIARY_TEMPLATES:
-        keyboard.append([
-            InlineKeyboardButton(
-                tmpl["title"],
-                callback_data=f"diary:{tmpl['id']}"
-            )
-        ])
+    for template in PHOTO_DIARY_TEMPLATES:
+        keyboard.append([InlineKeyboardButton(template["title"], callback_data=f"diary:{template['id']}")])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "📓 【写メ日記テンプレート集】\n\n"
-        "エスたまランキング上位店舗を分析した8種のテンプレートです。\n"
-        "使いたいテンプレートをタップしてください。",
+        "📓 【写メ日記テンプレート】\n\n"
+        "投稿したいテンプレートを選択してください。\n"
+        "選択すると、文面が表示されます。",
         reply_markup=reply_markup,
     )
 
 
 async def handle_diary_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """写メ日記テンプレート選択コールバック"""
+    """テンプレート詳細を表示"""
     query = update.callback_query
     await query.answer()
 
-    data = query.data
-    if not data.startswith("diary:"):
-        return
+    template_id = query.data.replace("diary:", "")
+    template = next((t for t in PHOTO_DIARY_TEMPLATES if t["id"] == template_id), None)
 
-    tmpl_id = data.replace("diary:", "")
-    tmpl = next((t for t in PHOTO_DIARY_TEMPLATES if t["id"] == tmpl_id), None)
-    if not tmpl:
+    if not template:
         await query.edit_message_text("⚠️ テンプレートが見つかりません。")
         return
 
-    # テンプレート本文を送信（コピーしやすいようにコードブロックなし・プレーンテキスト）
-    text = (
-        f"{tmpl['title']}\n"
-        f"タイトル例: {tmpl['short']}\n"
-        f"{'─' * 20}\n"
-        f"{tmpl['text']}\n"
-        f"{'─' * 20}\n"
-        "⬆️ 上の文面をコピーしてお使いください。"
+    message_text = (
+        f"📓 【{template['title']}】\n\n"
+        f"タイトル:\n{template['short']}\n\n"
+        f"本文:\n{template['text']}\n\n"
+        "👆 この文面をコピーしてエスたまの写メ日記投稿にお使いください。"
     )
 
-    # 戻るボタン付き
-    back_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 テンプレート一覧に戻る", callback_data="diary:back")]
-    ])
-    await query.edit_message_text(text, reply_markup=back_keyboard)
+    keyboard = [[InlineKeyboardButton("🔙 戻る", callback_data="diary:back")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(message_text, reply_markup=reply_markup)
 
 
 async def handle_diary_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """写メ日記テンプレート一覧に戻る"""
+    """テンプレート一覧に戻る"""
     query = update.callback_query
     await query.answer()
 
     keyboard = []
-    for tmpl in PHOTO_DIARY_TEMPLATES:
-        keyboard.append([
-            InlineKeyboardButton(
-                tmpl["title"],
-                callback_data=f"diary:{tmpl['id']}"
-            )
-        ])
+    for template in PHOTO_DIARY_TEMPLATES:
+        keyboard.append([InlineKeyboardButton(template["title"], callback_data=f"diary:{template['id']}")])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
+
     await query.edit_message_text(
-        "📓 【写メ日記テンプレート集】\n\n"
-        "エスたまランキング上位店舗を分析した8種のテンプレートです。\n"
-        "使いたいテンプレートをタップしてください。",
+        "📓 【写メ日記テンプレート】\n\n"
+        "投稿したいテンプレートを選択してください。\n"
+        "選択すると、文面が表示されます。",
         reply_markup=reply_markup,
     )
 
 
-# ─── /expense コマンド（経費入力） ───────────────────────
+# ─── 経費入力ハンドラー ─────────────────────────────────────
 async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """/expense または「💴 経費を入力」ボタン — 経費入力を開始"""
-    today = datetime.now().strftime("%Y-%m-%d")
+    """経費入力開始"""
+    # キャンセルボタン付きのキーボード
+    keyboard = [[KeyboardButton("今日"), KeyboardButton("昨日")], [KeyboardButton("❌ キャンセル")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
     await update.message.reply_text(
-        "💴 【経費を入力】\n\n"
-        "経費の日付を入力してください。\n"
-        f"今日の日付はそのままEnterで確定できます（{today}）\n\n"
-        "📅 日付（例: 2026-02-24）または「今日」と入力:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("今日"), KeyboardButton("❌ キャンセル")]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        ),
+        "💴 【経費入力】\n\n"
+        "Notionの経費管理ページに記録します。\n"
+        "まず、日付を入力してください（例: 2026-03-20）",
+        reply_markup=reply_markup,
     )
     return EXPENSE_DATE
 
@@ -474,29 +438,25 @@ async def expense_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_text("❌ 経費入力をキャンセルしました。", reply_markup=MENU_KEYBOARD)
         return ConversationHandler.END
 
-    # 「今日」または空の場合は今日の日付
-    if text in ("今日", "today", ""):
+    if text == "今日":
         date_str = datetime.now().strftime("%Y-%m-%d")
+    elif text == "昨日":
+        from datetime import timedelta
+        date_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     else:
-        # 日付フォーマットを正規化
+        # 簡易的な日付バリデーション
         import re
-        # YYYY/MM/DD → YYYY-MM-DD
-        text = re.sub(r"(\d{4})[/年](\d{1,2})[/月](\d{1,2})日?", r"\1-\2-\3", text)
-        # MM/DD → YYYY-MM-DD
-        text = re.sub(r"^(\d{1,2})[/月](\d{1,2})日?$", lambda m: f"{datetime.now().year}-{m.group(1).zfill(2)}-{m.group(2).zfill(2)}", text)
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+            await update.message.reply_text("⚠️ 日付は YYYY-MM-DD 形式で入力してください（例: 2026-03-20）")
+            return EXPENSE_DATE
         date_str = text
 
     context.user_data["expense_date"] = date_str
 
     await update.message.reply_text(
         f"📅 日付: {date_str}\n\n"
-        "💴 金額を入力してください（数字のみ、円単位）:\n"
-        "例: 3500",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("❌ キャンセル")]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        ),
+        "次に、金額を入力してください（例: 3500）",
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ キャンセル")]], resize_keyboard=True),
     )
     return EXPENSE_AMOUNT
 
@@ -679,399 +639,6 @@ async def expense_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """経費入力をキャンセル"""
     await update.message.reply_text("❌ 経費入力をキャンセルしました。", reply_markup=MENU_KEYBOARD)
     return ConversationHandler.END
-
-
-# ─── 🏪 キャスカン ハブ ──────────────────────────────────
-async def handle_caskan_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """キャスカンメニュー"""
-    from datetime import datetime
-    now = datetime.now()
-    this_month = f"{now.year}-{now.month:02d}"
-    next_month_year = now.year if now.month < 12 else now.year + 1
-    next_month_num = now.month + 1 if now.month < 12 else 1
-    next_month = f"{next_month_year}-{next_month_num:02d}"
-
-    keyboard = [
-        [
-            InlineKeyboardButton("📊 売上確認", callback_data="caskan:sales"),
-            InlineKeyboardButton("📅 スケジュール", callback_data="caskan:schedule"),
-        ],
-        [
-            InlineKeyboardButton(f"🗓 {now.month}月カレンダー", callback_data=f"caskan:calendar:{this_month}"),
-            InlineKeyboardButton(f"🗓 {next_month_num}月カレンダー", callback_data=f"caskan:calendar:{next_month}"),
-        ],
-        [
-            InlineKeyboardButton("📋 予約一覧", callback_data="caskan:reservations"),
-            InlineKeyboardButton("👥 キャスト一覧", callback_data="caskan:casts"),
-        ],
-        [
-            InlineKeyboardButton("🏠 ホーム情報", callback_data="caskan:home"),
-        ],
-        [
-            InlineKeyboardButton("🔗 管理画面を開く", url="https://my.caskan.jp/"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "🏦 【キャスカン ハブ】\n\n"
-        "キャスカン管理画面の情報を確認できます。\n"
-        "操作を選択してください:",
-        reply_markup=reply_markup,
-    )
-
-
-async def handle_caskan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """キャスカンコールバック処理"""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if not data.startswith("caskan:"):
-        return
-
-    action = data.replace("caskan:", "")
-    caskan = get_caskan()
-
-    if action in ("sales", "home"):
-        await query.edit_message_text("⏳ キャスカンから情報を取得中...")
-        info = caskan.get_home_info()
-
-        if "error" in info:
-            await query.edit_message_text(f"❌ エラー: {info['error']}")
-            return
-
-        sales = info.get("sales", {})
-        text_parts = ["🏪 【キャスカン ホーム情報】\n"]
-
-        if sales:
-            text_parts.append("📊 売上サマリー:")
-            for key, val in sales.items():
-                label = {"today": "本日", "yesterday": "昨日", "this_month": "今月", "last_month": "先月"}.get(key, key)
-                text_parts.append(f"  {label}: {val}")
-
-        if info.get("attendance_text"):
-            text_parts.append(f"\n📢 出勤情報:\n{info['attendance_text']}")
-
-        if info.get("guidance_text"):
-            text_parts.append(f"\n📍 案内状況:\n{info['guidance_text']}")
-
-        await query.edit_message_text("\n".join(text_parts))
-
-    elif action == "schedule":
-        await query.edit_message_text("⏳ スケジュールを取得中...")
-        result = caskan.get_schedule()
-
-        if "error" in result:
-            await query.edit_message_text(f"❌ エラー: {result['error']}")
-            return
-
-        text = result.get("schedule_text", "情報なし")
-        if len(text) > 3500:
-            text = text[:3500] + "\n\n... (続きは管理画面で確認)"
-
-        await query.edit_message_text(f"📅 【キャスカン スケジュール】\n{text}")
-
-    elif action == "reservations":
-        await query.edit_message_text("⏳ 予約情報を取得中...")
-        result = caskan.get_reservations()
-
-        if "error" in result:
-            await query.edit_message_text(f"❌ エラー: {result['error']}")
-            return
-
-        reservations = result.get("reservations", [])
-        if reservations:
-            text = "📋 【キャスカン 予約一覧】\n\n"
-            for r in reservations[:15]:
-                text += f"• {r}\n"
-            text += f"\n合計: {result.get('count', 0)}件"
-        else:
-            text = "📋 【キャスカン 予約一覧】\n\n予約データが見つかりません。"
-
-        if len(text) > 4000:
-            text = text[:4000] + "\n..."
-
-        await query.edit_message_text(text)
-
-    elif action == "casts":
-        await query.edit_message_text("⏳ キャスト一覧を取得中...")
-        casts = caskan.get_cast_list()
-
-        if casts:
-            text = "👥 【キャスカン キャスト一覧】\n\n"
-            for i, cast in enumerate(casts, 1):
-                text += f"{i}. {cast}\n"
-        else:
-            text = "👥 【キャスカン キャスト一覧】\n\nキャスト情報の取得に失敗しました。"
-
-        if len(text) > 4000:
-            text = text[:4000] + "\n..."
-
-        await query.edit_message_text(text)
-
-    elif action.startswith("calendar:"):
-        # caskan:calendar:YYYY-MM
-        ym = action.replace("calendar:", "")
-        try:
-            year, month = int(ym.split("-")[0]), int(ym.split("-")[1])
-        except (ValueError, IndexError):
-            await query.edit_message_text("❌ 日付形式エラー")
-            return
-
-        await query.edit_message_text(f"⏳ {year}年{month}月のシフト・ルーム情報を取得中...\n(数分かかる場合があります)")
-
-        data_monthly = caskan.get_monthly_shift(year, month)
-        if "error" in data_monthly:
-            await query.edit_message_text(f"❌ エラー: {data_monthly['error']}")
-            return
-
-        # カレンダー画像を生成
-        from calendar_image import generate_calendar_image
-        img_buf = generate_calendar_image(data_monthly)
-
-        # 前月・翌月ナビゲーションボタン
-        prev_year = year if month > 1 else year - 1
-        prev_month = month - 1 if month > 1 else 12
-        next_year = year if month < 12 else year + 1
-        next_month_n = month + 1 if month < 12 else 1
-
-        nav_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    f"◀ {prev_month}月",
-                    callback_data=f"caskan:calendar:{prev_year}-{prev_month:02d}"
-                ),
-                InlineKeyboardButton(
-                    f"{next_month_n}月 ▶",
-                    callback_data=f"caskan:calendar:{next_year}-{next_month_n:02d}"
-                ),
-            ],
-            [
-                InlineKeyboardButton("🔙 キャスカンメニューに戻る", callback_data="caskan:back_menu"),
-            ],
-        ])
-
-        # 画像を新規メッセージとして送信（edit_messageでは画像送信不可のため、元メッセージを削除して新規送信）
-        from telegram import InputFile
-        await query.delete_message()
-        await query.message.chat.send_photo(
-            photo=img_buf,
-            caption=f"🗓 {year}年{month}月 シフト・ルーム空き状況",
-            reply_markup=nav_keyboard,
-        )
-
-    elif action == "back_menu":
-        # キャスカンメニューに戻る（インラインキーボードを再表示）
-        from datetime import datetime
-        now = datetime.now()
-        this_month = f"{now.year}-{now.month:02d}"
-        next_month_year = now.year if now.month < 12 else now.year + 1
-        next_month_num = now.month + 1 if now.month < 12 else 1
-        next_month = f"{next_month_year}-{next_month_num:02d}"
-
-        keyboard = [
-            [
-                InlineKeyboardButton("📊 売上確認", callback_data="caskan:sales"),
-                InlineKeyboardButton("📅 スケジュール", callback_data="caskan:schedule"),
-            ],
-            [
-                InlineKeyboardButton(f"🗓 {now.month}月カレンダー", callback_data=f"caskan:calendar:{this_month}"),
-                InlineKeyboardButton(f"🗓 {next_month_num}月カレンダー", callback_data=f"caskan:calendar:{next_month}"),
-            ],
-            [
-                InlineKeyboardButton("📋 予約一覧", callback_data="caskan:reservations"),
-                InlineKeyboardButton("👥 キャスト一覧", callback_data="caskan:casts"),
-            ],
-            [
-                InlineKeyboardButton("🏠 ホーム情報", callback_data="caskan:home"),
-            ],
-            [
-                InlineKeyboardButton("🔗 管理画面を開く", url="https://my.caskan.jp/"),
-            ],
-        ]
-        await query.edit_message_text(
-            "🏦 【キャスカン ハブ】\n\n"
-            "キャスカン管理画面の情報を確認できます。\n"
-            "操作を選択してください:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-
-# ─── 🌟 エスたま ハブ ────────────────────────────────────
-async def handle_estama_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """エスたまメニュー"""
-    keyboard = [
-        [
-            InlineKeyboardButton("📊 ダッシュボード", callback_data="estama:dashboard"),
-            InlineKeyboardButton("📍 ご案内状況", callback_data="estama:guidance"),
-        ],
-        [
-            InlineKeyboardButton("📅 出勤表", callback_data="estama:schedule"),
-            InlineKeyboardButton("📋 予約確認", callback_data="estama:reservations"),
-        ],
-        [
-            InlineKeyboardButton("🎯 ワンクリックアピール", callback_data="estama:appeal"),
-        ],
-        [
-            InlineKeyboardButton("📰 ニュース一覧", callback_data="estama:news"),
-        ],
-        [
-            InlineKeyboardButton("🔗 管理画面を開く", url="https://estama.jp/admin/"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "🌟 【エスたま ハブ】\n\n"
-        "エスたま管理画面の情報を確認・操作できます。\n"
-        "操作を選択してください:",
-        reply_markup=reply_markup,
-    )
-
-
-async def handle_estama_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """エスたまコールバック処理"""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if not data.startswith("estama:"):
-        return
-
-    action = data.replace("estama:", "")
-    estama = get_estama()
-
-    if action == "dashboard":
-        await query.edit_message_text("⏳ エスたまから情報を取得中...")
-        info = estama.get_dashboard()
-
-        if "error" in info:
-            await query.edit_message_text(f"❌ エラー: {info['error']}")
-            return
-
-        text_parts = ["🌟 【エスたま ダッシュボード】\n"]
-
-        if info.get("shop_name"):
-            text_parts.append(f"🏪 {info['shop_name']}")
-        if info.get("plan"):
-            text_parts.append(f"📋 プラン: {info['plan']}")
-        if info.get("contract_period"):
-            text_parts.append(f"📅 {info['contract_period']}")
-        if info.get("points"):
-            text_parts.append(f"⭐ ポイント: {info['points']}pt")
-
-        if info.get("notifications"):
-            text_parts.append("\n🔔 通知:")
-            for notif in info["notifications"][:5]:
-                if notif and len(notif) > 3:
-                    text_parts.append(f"  • {notif}")
-
-        await query.edit_message_text("\n".join(text_parts))
-
-    elif action == "guidance":
-        await query.edit_message_text("⏳ ご案内状況を取得中...")
-        info = estama.get_guidance_status()
-
-        if "error" in info:
-            await query.edit_message_text(f"❌ エラー: {info['error']}")
-            return
-
-        text = f"📍 【エスたま ご案内状況】\n\nステータス: {info.get('status', '不明')}"
-        await query.edit_message_text(text)
-
-    elif action == "schedule":
-        await query.edit_message_text("⏳ 出勤表を取得中...")
-        result = estama.get_schedule()
-
-        if "error" in result:
-            await query.edit_message_text(f"❌ エラー: {result['error']}")
-            return
-
-        text = result.get("schedule_text", "情報なし")
-        if len(text) > 3500:
-            text = text[:3500] + "\n\n... (続きは管理画面で確認)"
-
-        await query.edit_message_text(f"📅 【エスたま 出勤表】\n\n{text}")
-
-    elif action == "reservations":
-        await query.edit_message_text("⏳ 予約情報を取得中...")
-        result = estama.get_reservations()
-
-        if "error" in result:
-            await query.edit_message_text(f"❌ エラー: {result['error']}")
-            return
-
-        reservations = result.get("reservations", [])
-        if reservations:
-            text = "📋 【エスたま 予約一覧】\n\n"
-            for r in reservations[:15]:
-                text += f"• {r}\n"
-            text += f"\n合計: {result.get('count', 0)}件"
-        else:
-            text = "📋 【エスたま 予約一覧】\n\n予約データが見つかりません。"
-
-        if len(text) > 4000:
-            text = text[:4000] + "\n..."
-
-        await query.edit_message_text(text)
-
-    elif action == "appeal":
-        # 確認ボタンを表示
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="estama_confirm:appeal_yes"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="estama_confirm:appeal_no"),
-            ]
-        ]
-        await query.edit_message_text(
-            "🎯 【集客ワンクリックアピール】\n\n"
-            "アピールを実行しますか？\n"
-            "エスたまの集客ワンクリックアピールが送信されます。",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    elif action == "news":
-        await query.edit_message_text("⏳ ニュース一覧を取得中...")
-        news = estama.get_news_list()
-
-        if news:
-            text = "📰 【エスたま ニュース一覧】\n\n"
-            for item in news:
-                text += f"📌 {item.get('title', '不明')} ({item.get('date', '')})\n"
-        else:
-            text = "📰 【エスたま ニュース一覧】\n\nニュースが見つかりません。"
-
-        await query.edit_message_text(text)
-
-
-async def handle_estama_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """エスたま確認コールバック"""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if not data.startswith("estama_confirm:"):
-        return
-
-    action = data.replace("estama_confirm:", "")
-
-    if action == "appeal_yes":
-        await query.edit_message_text("⏳ アピールを実行中...")
-        estama = get_estama()
-        success = estama.click_appeal()
-
-        if success:
-            await query.edit_message_text("✅ 集客ワンクリックアピールを実行しました！")
-        else:
-            await query.edit_message_text(
-                "❌ アピールの実行に失敗しました。\n"
-                "エスたま管理画面から直接実行してください。\n"
-                "🔗 https://estama.jp/admin/"
-            )
-
-    elif action == "appeal_no":
-        await query.edit_message_text("❌ アピールをキャンセルしました。")
 
 
 # ─── ✍️ SEO記事作成 ────────────────────────────────────────
@@ -1728,8 +1295,6 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^📰 ニュース生成$"), handle_news))
     app.add_handler(MessageHandler(filters.Regex(r"^📸 画像管理$"), handle_images))
     app.add_handler(MessageHandler(filters.Regex(r"^📓 写メ日記$"), handle_photo_diary))
-    app.add_handler(MessageHandler(filters.Regex(r"^🏢 キャスカン$"), handle_caskan_menu))
-    app.add_handler(MessageHandler(filters.Regex(r"^🌟 エスたま$"), handle_estama_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^✍️ SEO記事作成$"), handle_seo_menu))
     app.add_handler(CommandHandler("seo", handle_seo_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
@@ -1740,9 +1305,6 @@ def main() -> None:
 
     # インラインボタンコールバック
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
-    app.add_handler(CallbackQueryHandler(handle_caskan_callback, pattern=r"^caskan:"))
-    app.add_handler(CallbackQueryHandler(handle_estama_callback, pattern=r"^estama:"))
-    app.add_handler(CallbackQueryHandler(handle_estama_confirm_callback, pattern=r"^estama_confirm:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
     app.add_handler(CallbackQueryHandler(handle_diary_back_callback, pattern=r"^diary:back$"))
