@@ -5,7 +5,7 @@ SEO記事テンプレート生成モジュール
 テンプレート1: ランキング紹介風記事
 テンプレート2: お悩み解決型ハウツー記事
 
-OpenAI APIを使用して、全力エステの情報を埋め込んだ記事ドラフトを自動生成する。
+Gemini APIを使用して、全力エステの情報を埋め込んだ記事ドラフトを自動生成する。
 """
 
 import os
@@ -113,7 +113,7 @@ SEO_CHECKLIST = """
 """
 
 
-# ─── OpenAI APIによる記事生成 ──────────────────────────────
+# ─── Gemini APIによる記事生成 ──────────────────────────────
 
 def _get_system_prompt_ranking() -> str:
     """テンプレート1（ランキング紹介風）のシステムプロンプト"""
@@ -155,7 +155,7 @@ def _get_system_prompt_howto() -> str:
 
 async def generate_seo_article(template_type: str, custom_keyword: str = "") -> str:
     """
-    OpenAI APIを使ってSEO記事ドラフトを生成する。
+    Gemini APIを使ってSEO記事ドラフトを生成する。
 
     Args:
         template_type: "ranking" or "howto"
@@ -165,8 +165,10 @@ async def generate_seo_article(template_type: str, custom_keyword: str = "") -> 
         生成された記事テキスト
     """
     try:
-        import openai
-        client = openai.OpenAI()
+        import google.generativeai as genai
+        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+        model = genai.GenerativeModel("gemini-2.0-flash")
 
         if template_type == "ranking":
             system_prompt = _get_system_prompt_ranking()
@@ -178,17 +180,17 @@ async def generate_seo_article(template_type: str, custom_keyword: str = "") -> 
         if custom_keyword:
             user_prompt += f"\n\n追加で意識するキーワード: {custom_keyword}"
 
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+        response = model.generate_content(
+            contents=[
+                {"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]},
             ],
-            max_tokens=4000,
-            temperature=0.7,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=4000,
+                temperature=0.7,
+            ),
         )
 
-        article = response.choices[0].message.content
+        article = response.text
         return article
 
     except Exception as e:

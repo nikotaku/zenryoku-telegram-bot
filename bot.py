@@ -155,31 +155,28 @@ async def handle_news_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     topic = update.message.text.strip()
     context.user_data.pop("awaiting_news_topic", None)
 
-    # OpenAI APIでニュース文面を生成
+    # Gemini APIでニュース文面を生成
     try:
-        import openai
-        client = openai.OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "あなたは仙台のメンズエステ「全力エステ」のスタッフです。"
-                        "エスたま（メンズエステポータルサイト）のニュース投稿文面を作成してください。"
-                        "タイトルは30文字以内、本文は1000〜1500文字で作成してください。"
-                        "文体は丁寧で親しみやすく、集客効果が高い内容にしてください。"
-                        "出力形式: 【タイトル】と【本文】を分けて記載してください。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"テーマ: {topic}",
-                },
-            ],
-            max_tokens=1500,
+        import google.generativeai as genai
+        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+        model = genai.GenerativeModel("gemini-2.0-flash")
+
+        system_prompt = (
+            "あなたは仙台のメンズエステ「全力エステ」のスタッフです。"
+            "エスたま（メンズエステポータルサイト）のニュース投稿文面を作成してください。"
+            "タイトルは30文字以内、本文は1000〜1500文字で作成してください。"
+            "文体は丁寧で親しみやすく、集客効果が高い内容にしてください。"
+            "出力形式: 【タイトル】と【本文】を分けて記載してください。"
         )
-        result = response.choices[0].message.content
+
+        response = model.generate_content(
+            contents=[{"role": "user", "parts": [{"text": f"{system_prompt}\n\nテーマ: {topic}"}]}],
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=1500,
+            ),
+        )
+        result = response.text
         await update.message.reply_text(
             f"📰 【ニュース文面】\n\n{result}",
             reply_markup=MENU_KEYBOARD,
@@ -188,7 +185,7 @@ async def handle_news_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.error(f"ニュース生成エラー: {e}")
         await update.message.reply_text(
             "📰 ニュース文面の生成に失敗しました。\n"
-            "OPENAI_API_KEY が設定されているか確認してください。",
+            "GEMINI_API_KEY が設定されているか確認してください。",
             reply_markup=MENU_KEYBOARD,
         )
     return True
@@ -1237,7 +1234,7 @@ async def handle_seo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.message.chat.send_message(
                 "❌ 記事の生成に失敗しました。\n\n"
                 "考えられる原因:\n"
-                "• OPENAI_API_KEY が設定されていない\n"
+                "• GEMINI_API_KEY が設定されていない\n"
                 "• APIの利用制限に達している\n\n"
                 f"エラー: {str(e)[:200]}",
                 reply_markup=MENU_KEYBOARD,

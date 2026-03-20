@@ -1,7 +1,7 @@
 """
 ブラウザエージェント — LLM インテント解析 + Playwright 自動操作
 
-ユーザーの自然言語指示を OpenAI API で解析し、
+ユーザーの自然言語指示を Gemini API で解析し、
 キャスカン・エスたまのブラウザ操作を自動実行する。
 
 フロー:
@@ -134,8 +134,10 @@ async def parse_intent(user_message: str) -> dict:
         }
     """
     try:
-        import openai
-        client = openai.OpenAI()
+        import google.generativeai as genai
+        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
+        model = genai.GenerativeModel("gemini-2.0-flash")
 
         # 現在日時のコンテキストを追加
         now = datetime.now()
@@ -161,18 +163,18 @@ async def parse_intent(user_message: str) -> dict:
             f"来週の日付: {json.dumps(next_week_dates, ensure_ascii=False)}"
         )
 
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"{context_msg}\n\n指示: {user_message}"},
-            ],
-            max_tokens=1000,
-            temperature=0.1,
-            response_format={"type": "json_object"},
+        prompt = f"{SYSTEM_PROMPT}\n\n{context_msg}\n\n指示: {user_message}"
+
+        response = model.generate_content(
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=1000,
+                temperature=0.1,
+                response_mime_type="application/json",
+            ),
         )
 
-        result_text = response.choices[0].message.content.strip()
+        result_text = response.text.strip()
         result = json.loads(result_text)
 
         logger.info(f"LLM解析結果: {result}")
