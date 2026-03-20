@@ -168,7 +168,7 @@ async def generate_seo_article(template_type: str, custom_keyword: str = "") -> 
         import google.generativeai as genai
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
 
         if template_type == "ranking":
             system_prompt = _get_system_prompt_ranking()

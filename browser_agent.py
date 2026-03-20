@@ -139,7 +139,7 @@ async def parse_intent(user_message: str) -> dict:
         import google.generativeai as genai
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
 
         # 現在日時のコンテキストを追加
         now = datetime.now()

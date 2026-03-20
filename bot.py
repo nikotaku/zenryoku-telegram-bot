@@ -120,7 +120,7 @@ async def handle_news_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         import google.generativeai as genai
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
 
         system_prompt = (
             "あなたは仙台のメンズエステ「全力エステ」のスタッフです。"
