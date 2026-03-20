@@ -112,26 +112,8 @@ MENU_INLINE_KEYBOARD = InlineKeyboardMarkup([
 
 # ─── /start コマンド ───────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """メインメニューを表示する"""
-    welcome_text = (
-        "こんにちは！全力エステBotへようこそ 💪\n\n"
-        "以下のメニューから操作を選んでください。\n\n"
-        "📰 ニュース生成 — エスたま用のニュース文面を作成\n"
-        "📸 画像管理 — セラピストのNotionページに写真を保存\n"
-        "💴 経費を入力 — 経費をNotionに記録\n"
-        "📓 写メ日記 — テンプレートをコピーして使える\n"
-        "✍️ SEO記事作成 — SEOテンプレートで記事ドラフトを生成\n"
-        "🏢 キャスカン — 売上・スケジュール確認\n"
-        "🌟 エスたま — ご案内状況・アピール\n"
-        "🤖 エージェント — AIが自然言語でシフト操作を自動実行"
-    )
-    # リプライキーボード（ボタンメニュー）を送信
-    await update.message.reply_text(welcome_text, reply_markup=MENU_KEYBOARD)
-    # Notionセラピスト一覧のインラインリンクボタンを別メッセージで送信
-    await update.message.reply_text(
-        "🗒 Notionのセラピスト一覧は下のボタンから開けます:",
-        reply_markup=MENU_INLINE_KEYBOARD,
-    )
+    """何も表示しない（/startコマンドは無視）"""
+    pass
 
 
 # ─── /news コマンド ─────────────────────────────────────
