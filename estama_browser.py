@@ -12,7 +12,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-ESTAMA_LOGIN_ID = os.environ.get("ESTAMA_LOGIN_ID", "zr.sendai@gmail.com")
+# ESTAMA_LOGIN_ID または ESTAMA_EMAIL のどちらの環境変数名でも受け付ける
+ESTAMA_LOGIN_ID = (
+    os.environ.get("ESTAMA_LOGIN_ID")
+    or os.environ.get("ESTAMA_EMAIL")
+    or "zr.sendai@gmail.com"
+)
 ESTAMA_PASSWORD = os.environ.get("ESTAMA_PASSWORD", "Zenryoku1209")
 
 BASE_URL = "https://estama.jp"
@@ -69,81 +74,106 @@ class EstamaBrowser:
             self._logged_in = False
 
     async def login(self) -> bool:
-        """エスたまにログイン"""
+        """エスたまにログイン（複数フォールバック付き）"""
+        logger.info(f"エスたまログイン試行: {ESTAMA_LOGIN_ID}")
         try:
             await self._ensure_browser()
             page = self._page
 
             # ログインページへ移動
             await page.goto(f"{BASE_URL}/login/", wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(2000)
 
-            # メールアドレス入力
-            mail_input = page.locator('input[name="mail"], input[type="email"], input#mail')
+            # ページの内容をデバッグログ
+            current_url = page.url
+            logger.info(f"ログインページURL: {current_url}")
+
+            # 既に管理画面にいる場合はログイン済み
+            if "/admin" in current_url and "/login" not in current_url:
+                self._logged_in = True
+                logger.info("エスたま: 既にログイン済み")
+                return True
+
+            # 方法1: Ajaxログイン（CSRFトークンあり）
+            csrf_token = await page.evaluate("""() => {
+                const el = document.getElementById('csrf_footer')
+                    || document.querySelector('input[name="ctk"]')
+                    || document.querySelector('meta[name="csrf-token"]');
+                return el ? (el.value || el.getAttribute('content') || '') : '';
+            }""")
+            logger.info(f"CSRFトークン: {'found' if csrf_token else 'not found'}")
+
+            if csrf_token:
+                login_id_escaped = ESTAMA_LOGIN_ID.replace("'", "\\'")
+                password_escaped = ESTAMA_PASSWORD.replace("'", "\\'")
+                response = await page.evaluate(f"""async () => {{
+                    const formData = new URLSearchParams();
+                    formData.append('str[0][name]', 'mail');
+                    formData.append('str[0][value]', '{login_id_escaped}');
+                    formData.append('str[1][name]', 'password');
+                    formData.append('str[1][value]', '{password_escaped}');
+                    formData.append('str[2][name]', 'r');
+                    formData.append('str[2][value]', '');
+                    formData.append('ctk', '{csrf_token}');
+
+                    const resp = await fetch('{BASE_URL}/post/login_shop', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        }},
+                        body: formData.toString(),
+                        credentials: 'include',
+                    }});
+                    const text = await resp.text();
+                    try {{ return JSON.parse(text); }} catch(e) {{ return [text]; }}
+                }}""")
+
+                logger.info(f"Ajaxログインレスポンス: {response}")
+
+                if response and isinstance(response, list) and response[0] in ("OK", "REDIRECT_OK"):
+                    self._logged_in = True
+                    await page.goto(f"{ADMIN_URL}/", wait_until="networkidle", timeout=15000)
+                    logger.info("エスたまにAjaxログイン成功")
+                    return True
+
+            # 方法2: 通常のフォーム入力ログイン
+            mail_input = page.locator(
+                'input[name="mail"], input[name="email"], input[type="email"], input#mail'
+            )
             if await mail_input.count() > 0:
                 await mail_input.first.fill(ESTAMA_LOGIN_ID)
+                logger.info("メール入力完了")
+            else:
+                logger.warning("メール入力フィールドが見つかりません")
 
-            # パスワード入力
             pw_input = page.locator('input[name="password"], input[type="password"]')
             if await pw_input.count() > 0:
                 await pw_input.first.fill(ESTAMA_PASSWORD)
+                logger.info("パスワード入力完了")
+            else:
+                logger.warning("パスワード入力フィールドが見つかりません")
 
-            # ログインボタンをクリック
             login_btn = page.locator(
                 'button:has-text("ログイン"), input[type="submit"], '
-                'a:has-text("ログイン"), .btn-login'
+                'a:has-text("ログイン"), .btn-login, button[type="submit"]'
             )
             if await login_btn.count() > 0:
                 await login_btn.first.click()
+                logger.info("ログインボタンクリック")
 
             await page.wait_for_timeout(3000)
 
-            # ログイン成功判定
             current_url = page.url
+            logger.info(f"ログイン後のURL: {current_url}")
+
             if "/admin" in current_url or "/login" not in current_url:
                 self._logged_in = True
-                logger.info("エスたまにPlaywrightでログイン成功")
+                logger.info("エスたまにフォームログイン成功")
                 return True
-            else:
-                # Ajax ログインの場合、ページ遷移しないことがある
-                # CSRFトークンベースのAjaxログインを試行
-                csrf_token = await page.evaluate("""() => {
-                    const el = document.getElementById('csrf_footer');
-                    return el ? el.value : '';
-                }""")
 
-                if csrf_token:
-                    # Ajax POSTでログイン
-                    response = await page.evaluate(f"""async () => {{
-                        const formData = new URLSearchParams();
-                        formData.append('str[0][name]', 'mail');
-                        formData.append('str[0][value]', '{ESTAMA_LOGIN_ID}');
-                        formData.append('str[1][name]', 'password');
-                        formData.append('str[1][value]', '{ESTAMA_PASSWORD}');
-                        formData.append('str[2][name]', 'r');
-                        formData.append('str[2][value]', '');
-                        formData.append('ctk', '{csrf_token}');
-
-                        const resp = await fetch('{BASE_URL}/post/login_shop', {{
-                            method: 'POST',
-                            headers: {{
-                                'Content-Type': 'application/x-www-form-urlencoded',
-                                'X-Requested-With': 'XMLHttpRequest',
-                            }},
-                            body: formData.toString(),
-                        }});
-                        return await resp.json();
-                    }}""")
-
-                    if response and (response[0] == "OK" or response[0] == "REDIRECT_OK"):
-                        self._logged_in = True
-                        # 管理画面に遷移
-                        await page.goto(f"{ADMIN_URL}/", wait_until="networkidle", timeout=15000)
-                        logger.info("エスたまにAjaxログイン成功")
-                        return True
-
-                logger.error("エスたまログイン失敗")
-                return False
+            logger.error(f"エスたまログイン失敗: URL={current_url}")
+            return False
 
         except Exception as e:
             logger.error(f"エスたまPlaywrightログインエラー: {e}")

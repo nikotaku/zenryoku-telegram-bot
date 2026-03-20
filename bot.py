@@ -76,6 +76,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
         [KeyboardButton("✍️ SEO記事作成")],
         [KeyboardButton("💰 仮想通貨"), KeyboardButton("🤖 エージェント")],
+        [KeyboardButton("📅 シフトDB")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -91,8 +92,24 @@ MENU_INLINE_KEYBOARD = InlineKeyboardMarkup([
 
 # ─── /start コマンド ───────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """何も表示しない（/startコマンドは無視）"""
-    pass
+    """/start — メインメニューを表示"""
+    await update.message.reply_text(
+        "💫 全力エステ Botへようこそ！\n\n"
+        "下のメニューから操作を選んでください。\n\n"
+        "📅 シフトDB\n"
+        "　NotionシフトDBをマスタに、キャスカン・エスたまへ同期\n\n"
+        "🤖 エージェント\n"
+        "　自然言語でシフト登録・同期操作（例: 『明日りおんをキャスカンに登録』）\n\n"
+        "💰 仮想通貨\n"
+        "　bitbankの保有資産を確認\n\n"
+        "📰 ニュース生成 / ✍️ SEO記事作成\n"
+        "　エスたま向けの投稿文面・記事をAI生成\n\n"
+        "💴 経費を入力\n"
+        "　Notion・スプレッドシートに経費を記録\n\n"
+        "📓 写メ日記 / 📸 画像管理\n"
+        "　テンプレート表示・セラピスト写真をNotionに保存",
+        reply_markup=MENU_KEYBOARD,
+    )
 
 
 # ─── /news コマンド ─────────────────────────────────────
@@ -993,22 +1010,266 @@ async def handle_crypto_callback(update: Update, context: ContextTypes.DEFAULT_T
             )
 
 
+# ─── 📅 シフトDB（Notionマスタ）─────────────────────────────
+
+async def handle_shift_db_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """シフトDBメニューを表示"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 今日のシフトを確認", callback_data="shiftdb:today"),
+            InlineKeyboardButton("📆 今週のシフトを確認", callback_data="shiftdb:week"),
+        ],
+        [
+            InlineKeyboardButton("⬜ 未着手シフト一覧", callback_data="shiftdb:pending"),
+        ],
+        [
+            InlineKeyboardButton("🔄 今日のシフトを全同期", callback_data="shiftdb:sync_today"),
+        ],
+        [
+            InlineKeyboardButton("🟢 キャスカンに同期", callback_data="shiftdb:sync_caskan"),
+            InlineKeyboardButton("🔵 エスたまに同期", callback_data="shiftdb:sync_estama"),
+        ],
+        [
+            InlineKeyboardButton("🔍 差異を確認する", callback_data="shiftdb:diff"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "📅 【シフトDB】\n\n"
+        "NotionシフトDBをマスタとして、\n"
+        "キャスカン・エスたまへのシフト同期を管理します。\n\n"
+        "操作を選択してください:",
+        reply_markup=reply_markup,
+    )
+
+
+async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """シフトDBコールバック処理"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("shiftdb:"):
+        return
+
+    action = data.replace("shiftdb:", "")
+
+    if action == "today":
+        await query.edit_message_text("⏳ NotionシフトDBから今日のシフトを取得中...")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "notion_get_shifts", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            # 戻るボタン付きで表示
+            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
+            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "week":
+        await query.edit_message_text("⏳ NotionシフトDBから今週のシフトを取得中...")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "notion_get_shifts", "params": {"days_range": 6}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
+            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "pending":
+        await query.edit_message_text("⏳ 未着手シフトを取得中...")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "notion_get_pending", "params": {"target": "caskan"}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
+            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "sync_today":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_all"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="shiftdb_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "🔄 【全同期確認】\n\n"
+            "NotionシフトDB → キャスカン＆エスたまへ\n"
+            "今日のシフトを同期します。\n\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "sync_caskan":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_caskan"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="shiftdb_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "🟢 【キャスカン同期確認】\n\n"
+            "NotionシフトDB → キャスカンへ\n"
+            "未着手シフトを同期します。\n\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "sync_estama":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_estama"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="shiftdb_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "🔵 【エスたま同期確認】\n\n"
+            "NotionシフトDB → エスたまへ\n"
+            "未同期シフトを同期します。\n\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "diff":
+        await query.edit_message_text("⏳ NotionシフトDB・キャスカン・エスたまのシフトを比較中...")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "diff_shifts", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
+            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "back":
+        keyboard = [
+            [
+                InlineKeyboardButton("📋 今日のシフトを確認", callback_data="shiftdb:today"),
+                InlineKeyboardButton("📆 今週のシフトを確認", callback_data="shiftdb:week"),
+            ],
+            [
+                InlineKeyboardButton("⬜ 未着手シフト一覧", callback_data="shiftdb:pending"),
+            ],
+            [
+                InlineKeyboardButton("🔄 今日のシフトを全同期", callback_data="shiftdb:sync_today"),
+            ],
+            [
+                InlineKeyboardButton("🟢 キャスカンに同期", callback_data="shiftdb:sync_caskan"),
+                InlineKeyboardButton("🔵 エスたまに同期", callback_data="shiftdb:sync_estama"),
+            ],
+            [
+                InlineKeyboardButton("🔍 差異を確認する", callback_data="shiftdb:diff"),
+            ],
+        ]
+        await query.edit_message_text(
+            "📅 【シフトDB】\n\n"
+            "NotionシフトDBをマスタとして、\n"
+            "キャスカン・エスたまへのシフト同期を管理します。\n\n"
+            "操作を選択してください:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
+async def handle_shift_db_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """シフトDB同期確認コールバック"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("shiftdb_confirm:"):
+        return
+
+    action = data.replace("shiftdb_confirm:", "")
+
+    if action == "cancel":
+        await query.edit_message_text("❌ 操作をキャンセルしました。")
+        return
+
+    if action == "sync_all":
+        await query.edit_message_text(
+            "⏳ NotionシフトDB → キャスカン＆エスたまへ同期中...\n"
+            "しばらくお待ちください。"
+        )
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "sync_all", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
+            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "sync_caskan":
+        await query.edit_message_text(
+            "⏳ NotionシフトDB → キャスカンへ同期中...\n"
+            "しばらくお待ちください。"
+        )
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "sync_to_caskan", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
+            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "sync_estama":
+        await query.edit_message_text(
+            "⏳ NotionシフトDB → エスたまへ同期中...\n"
+            "しばらくお待ちください。"
+        )
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "sync_to_estama", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
+            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+
 # ─── 🤖 エージェント（ブラウザ自動操作）─────────────────────
 
 async def handle_agent_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """エージェントメニューを表示"""
     keyboard = [
         [
-            InlineKeyboardButton("🔄 同期する", callback_data="agent:sync"),
+            InlineKeyboardButton("🔄 今日のシフトを全同期", callback_data="agent:sync"),
         ],
         [
-            InlineKeyboardButton("📋 同期情報を確認する", callback_data="agent:diff"),
+            InlineKeyboardButton("🟢 キャスカンに同期", callback_data="agent:sync_caskan"),
+            InlineKeyboardButton("🔵 エスたまに同期", callback_data="agent:sync_estama"),
+        ],
+        [
+            InlineKeyboardButton("📋 差異を確認する", callback_data="agent:diff"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "🤖 エージェント",
+        "🤖 【エージェント】\n\n"
+        "NotionシフトDBをマスタとして\n"
+        "キャスカン・エスたまへの同期を管理します。\n\n"
+        "💡 自然言語でも操作できます:\n"
+        "例: 『明日りおんを14時から23時でキャスカンに登録して』",
         reply_markup=reply_markup,
     )
 
@@ -1032,14 +1293,45 @@ async def handle_agent_callback(update: Update, context: ContextTypes.DEFAULT_TY
             ]
         ]
         await query.edit_message_text(
-            "🔄 【シフト同期】\n\n"
-            "キャスカン→エスたまのシフト同期を実行します。\n"
+            "🔄 【全同期確認】\n\n"
+            "NotionシフトDB → キャスカン＆エスたまへ\n"
+            "今日のシフトを同期します。\n\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "sync_caskan":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_caskan"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "🟢 【キャスカン同期確認】\n\n"
+            "NotionシフトDB → キャスカンへ\n"
+            "未着手シフトを同期します。\n\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "sync_estama":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_estama"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "🔵 【エスたま同期確認】\n\n"
+            "NotionシフトDB → エスたまへ\n"
+            "未同期シフトを同期します。\n\n"
             "実行しますか？",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
     elif action == "diff":
-        await query.edit_message_text("⏳ キャスカンとエスたまのシフトを比較中...")
+        await query.edit_message_text("⏳ NotionシフトDB・キャスカン・エスたまのシフトを比較中...")
         try:
             result = await browser_agent.execute_confirmed(
                 '{"action": "diff_shifts", "params": {}}'
@@ -1067,10 +1359,43 @@ async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DE
         return
 
     if action == "sync":
-        await query.edit_message_text("⏳ シフト同期を実行中...\nしばらくお待ちください。")
+        await query.edit_message_text(
+            "⏳ NotionシフトDB → キャスカン＆エスたまへ同期中...\n"
+            "しばらくお待ちください。"
+        )
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "sync_shifts", "params": {}}'
+                '{"action": "sync_all", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "sync_caskan":
+        await query.edit_message_text(
+            "⏳ NotionシフトDB → キャスカンへ同期中...\n"
+            "しばらくお待ちください。"
+        )
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "sync_to_caskan", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "sync_estama":
+        await query.edit_message_text(
+            "⏳ NotionシフトDB → エスたまへ同期中...\n"
+            "しばらくお待ちください。"
+        )
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "sync_to_estama", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -1161,6 +1486,7 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     read_actions = {
         "caskan_get_shifts", "caskan_get_casts", "caskan_get_rooms",
         "estama_get_schedule", "estama_get_therapists", "diff_shifts", "unknown",
+        "notion_get_shifts", "notion_get_pending",
     }
 
     is_read_only = (
@@ -1268,6 +1594,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^💰 仮想通貨$"), handle_crypto_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
     app.add_handler(CommandHandler("agent", handle_agent_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
+    app.add_handler(CommandHandler("shiftdb", handle_shift_db_menu))
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -1282,6 +1610,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_agent_callback, pattern=r"^agent:"))
     app.add_handler(CallbackQueryHandler(handle_agent_confirm_callback, pattern=r"^agent_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_agent_nlp_confirm_callback, pattern=r"^agent_nlp:"))
+    app.add_handler(CallbackQueryHandler(handle_shift_db_callback, pattern=r"^shiftdb:"))
+    app.add_handler(CallbackQueryHandler(handle_shift_db_confirm_callback, pattern=r"^shiftdb_confirm:"))
 
     # その他のテキストメッセージ（最後に登録）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
@@ -1294,6 +1624,7 @@ def main() -> None:
             BotCommand("images", "画像管理"),
             BotCommand("seo", "SEO記事ドラフトを生成"),
             BotCommand("agent", "AIブラウザエージェント"),
+            BotCommand("shiftdb", "シフトDB（Notionマスタ同期）"),
         ])
         logger.info("Telegramコマンドメニューを更新しました")
 
