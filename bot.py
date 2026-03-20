@@ -914,32 +914,16 @@ async def handle_agent_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """エージェントメニューを表示"""
     keyboard = [
         [
-            InlineKeyboardButton("📅 今日のシフト確認", callback_data="agent:today_shifts"),
+            InlineKeyboardButton("🔄 同期する", callback_data="agent:sync"),
         ],
         [
-            InlineKeyboardButton("🔄 シフト同期（キャスカン→エスたま）", callback_data="agent:sync_today"),
-        ],
-        [
-            InlineKeyboardButton("📆 今週のシフト一括同期", callback_data="agent:sync_week"),
-        ],
-        [
-            InlineKeyboardButton("📢 エスたまアピール", callback_data="agent:appeal"),
-        ],
-        [
-            InlineKeyboardButton("💬 自然言語で指示する", callback_data="agent:chat_mode"),
+            InlineKeyboardButton("📋 同期情報を確認する", callback_data="agent:diff"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "🤖 【ブラウザエージェント】\n\n"
-        "AIがキャスカン・エスたまを自動操作します。\n"
-        "ボタンを選ぶか、「💬 自然言語で指示」をタップして\n"
-        "日本語で指示を入力してください。\n\n"
-        "💡 例:\n"
-        "「明日りおんを14時から23時でキャスカンに登録して」\n"
-        "「今日のシフトを確認して」\n"
-        "「キャスカンからエスたまにシフト同期して」",
+        "🤖 エージェント",
         reply_markup=reply_markup,
     )
 
@@ -955,74 +939,31 @@ async def handle_agent_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     action = data.replace("agent:", "")
 
-    if action == "today_shifts":
-        await query.edit_message_text("⏳ ブラウザでキャスカンにアクセス中...")
+    if action == "sync":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "🔄 【シフト同期】\n\n"
+            "キャスカン→エスたまのシフト同期を実行します。\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "diff":
+        await query.edit_message_text("⏳ キャスカンとエスたまのシフトを比較中...")
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "caskan_get_shifts", "params": {}}'
+                '{"action": "diff_shifts", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
             await query.edit_message_text(result)
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "sync_today":
-        # 確認ボタンを表示
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_today"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
-            ]
-        ]
-        await query.edit_message_text(
-            "🔄 【シフト同期】\n\n"
-            "今日のキャスカンのシフトをエスたまに同期します。\n"
-            "実行しますか？",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    elif action == "sync_week":
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_week"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
-            ]
-        ]
-        await query.edit_message_text(
-            "📆 【今週のシフト一括同期】\n\n"
-            "今週のキャスカンのシフトをエスたまに一括同期します。\n"
-            "実行しますか？\n\n"
-            "⚠️ 数分かかる場合があります。",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    elif action == "appeal":
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:appeal"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
-            ]
-        ]
-        await query.edit_message_text(
-            "📢 【エスたまアピール】\n\n"
-            "ブラウザでエスたまの集客ワンクリックアピールを実行します。\n"
-            "実行しますか？",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    elif action == "chat_mode":
-        context.user_data["agent_chat_mode"] = True
-        await query.edit_message_text(
-            "💬 【自然言語モード】\n\n"
-            "日本語で指示を入力してください。\n"
-            "AIが意図を解析してブラウザ操作を実行します。\n\n"
-            "💡 例:\n"
-            "「明日りおんを14時から23時でキャスカンに登録して」\n"
-            "「キャスト一覧を見せて」\n"
-            "「エスたまのご案内状況を今すぐにして」\n\n"
-            "終了するには「終了」と入力してください。"
-        )
 
 
 async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1040,41 +981,14 @@ async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DE
         await query.edit_message_text("❌ 操作をキャンセルしました。")
         return
 
-    if action == "sync_today":
-        await query.edit_message_text("⏳ ブラウザでシフト同期を実行中...\nしばらくお待ちください。")
+    if action == "sync":
+        await query.edit_message_text("⏳ シフト同期を実行中...\nしばらくお待ちください。")
         try:
             result = await browser_agent.execute_confirmed(
                 '{"action": "sync_shifts", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
-            await query.edit_message_text(result)
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "sync_week":
-        await query.edit_message_text("⏳ 今週のシフトを一括同期中...\n数分かかる場合があります。")
-        try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "sync_all_week", "params": {}}'
-            )
-            # 長い場合は分割送信
-            if len(result) > 4000:
-                chunks = _split_text(result, 3800)
-                await query.edit_message_text(chunks[0])
-                for chunk in chunks[1:]:
-                    await query.message.chat.send_message(chunk)
-            else:
-                await query.edit_message_text(result)
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "appeal":
-        await query.edit_message_text("⏳ ブラウザでエスたまアピールを実行中...")
-        try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "estama_appeal", "params": {}}'
-            )
             await query.edit_message_text(result)
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
@@ -1116,40 +1030,40 @@ async def handle_agent_nlp_confirm_callback(update: Update, context: ContextType
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
 
-async def handle_agent_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """エージェント自然言語モードのメッセージ処理
+# ─── その他 ──────────────────────────────────────────────────────────────
+async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """ボタン以外のテキストメッセージ — Gemini LLMで解析して適切な操作を実行"""
+    text = update.message.text.strip() if update.message.text else ""
 
-    Returns:
-        True ならエージェントが処理した、False なら他のハンドラーに委譲
-    """
-    if not context.user_data.get("agent_chat_mode"):
-        return False
+    # SEOキーワード入力待ちの場合（専用フローを優先）
+    if context.user_data.get("seo_awaiting_keyword"):
+        handled = await handle_seo_keyword_input(update, context)
+        if handled:
+            return
 
-    text = update.message.text.strip()
+    # ニューストピック待ちの場合（専用フローを優先）
+    if context.user_data.get("awaiting_news_topic"):
+        handled = await handle_news_topic(update, context)
+        if handled:
+            return
 
-    # 終了コマンド
-    if text in ("終了", "キャンセル", "exit", "quit", "戻る"):
-        context.user_data.pop("agent_chat_mode", None)
-        context.user_data.pop("agent_pending_action", None)
-        await update.message.reply_text(
-            "🤖 エージェントモードを終了しました。",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return True
+    # テキストメッセージは常にGemini LLMで解析して実行
+    if not text:
+        return
 
-    # LLMでインテント解析
     await update.message.reply_text("🧠 AIが指示を解析中...")
 
+    import json as _json
     try:
         confirmation, action_json = await browser_agent.process_agent_command(text)
     except Exception as e:
         await update.message.reply_text(
             f"❌ 解析エラー: {str(e)[:300]}\n\n"
             "もう一度入力してください。",
+            reply_markup=MENU_KEYBOARD,
         )
-        return True
+        return
 
-    import json as _json
     try:
         intent = _json.loads(action_json)
     except Exception:
@@ -1158,10 +1072,10 @@ async def handle_agent_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     action_name = intent.get("action", "")
     actions_list = intent.get("actions", [])
 
-    # 読み取り系の操作は確認なしで即実行
+    # 読み取り系・差異確認は確認なしで即実行
     read_actions = {
         "caskan_get_shifts", "caskan_get_casts", "caskan_get_rooms",
-        "estama_get_schedule", "estama_get_therapists", "unknown",
+        "estama_get_schedule", "estama_get_therapists", "diff_shifts", "unknown",
     }
 
     is_read_only = (
@@ -1195,37 +1109,6 @@ async def handle_agent_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"🤖 【操作確認】\n\n{confirmation}\n\n実行しますか？",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-
-    return True
-
-# ─── その他 ──────────────────────────────────────────────────
-async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """未知のテキストメッセージ"""
-    text = update.message.text.strip() if update.message.text else ""
-
-    # エージェントチャットモードの場合
-    if context.user_data.get("agent_chat_mode"):
-        handled = await handle_agent_chat(update, context)
-        if handled:
-            return
-
-    # SEOキーワード入力待ちの場合
-    if context.user_data.get("seo_awaiting_keyword"):
-        handled = await handle_seo_keyword_input(update, context)
-        if handled:
-            return
-
-    # ニューストピック待ちの場合
-    if context.user_data.get("awaiting_news_topic"):
-        handled = await handle_news_topic(update, context)
-        if handled:
-            return
-
-    await update.message.reply_text(
-        "メニューから操作を選んでください。\n"
-        "📸 画像を送信するとセラピストのNotionに保存できます。",
-        reply_markup=MENU_KEYBOARD,
-    )
 
 
 # ─── メイン ─────────────────────────────────────────────
