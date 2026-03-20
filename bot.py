@@ -51,6 +51,8 @@ from seo_article import (
     TEMPLATE_2_INFO,
 )
 
+import browser_agent
+
 # ─── 設定 ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
@@ -94,6 +96,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
         [KeyboardButton("✍️ SEO記事作成")],
         [KeyboardButton("🏢 キャスカン"), KeyboardButton("🌟 エスたま")],
+        [KeyboardButton("🤖 エージェント")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -119,7 +122,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📓 写メ日記 — テンプレートをコピーして使える\n"
         "✍️ SEO記事作成 — SEOテンプレートで記事ドラフトを生成\n"
         "🏢 キャスカン — 売上・スケジュール確認\n"
-        "🌟 エスたま — ご案内状況・アピール"
+        "🌟 エスたま — ご案内状況・アピール\n"
+        "🤖 エージェント — AIが自然言語でシフト操作を自動実行"
     )
     # リプライキーボード（ボタンメニュー）を送信
     await update.message.reply_text(welcome_text, reply_markup=MENU_KEYBOARD)
@@ -1358,11 +1362,306 @@ def _split_text(text: str, max_length: int) -> list:
         chunks.append(current)
     return chunks
 
+# ─── 🤖 エージェント（ブラウザ自動操作）─────────────────────
 
-# ─── その他 ──────────────────────────────────────────────
+async def handle_agent_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エージェントメニューを表示"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 今日のシフト確認", callback_data="agent:today_shifts"),
+        ],
+        [
+            InlineKeyboardButton("🔄 シフト同期（キャスカン→エスたま）", callback_data="agent:sync_today"),
+        ],
+        [
+            InlineKeyboardButton("📆 今週のシフト一括同期", callback_data="agent:sync_week"),
+        ],
+        [
+            InlineKeyboardButton("📢 エスたまアピール", callback_data="agent:appeal"),
+        ],
+        [
+            InlineKeyboardButton("💬 自然言語で指示する", callback_data="agent:chat_mode"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "🤖 【ブラウザエージェント】\n\n"
+        "AIがキャスカン・エスたまを自動操作します。\n"
+        "ボタンを選ぶか、「💬 自然言語で指示」をタップして\n"
+        "日本語で指示を入力してください。\n\n"
+        "💡 例:\n"
+        "「明日りおんを14時から23時でキャスカンに登録して」\n"
+        "「今日のシフトを確認して」\n"
+        "「キャスカンからエスたまにシフト同期して」",
+        reply_markup=reply_markup,
+    )
+
+
+async def handle_agent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エージェントコールバック処理"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("agent:"):
+        return
+
+    action = data.replace("agent:", "")
+
+    if action == "today_shifts":
+        await query.edit_message_text("⏳ ブラウザでキャスカンにアクセス中...")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "caskan_get_shifts", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "sync_today":
+        # 確認ボタンを表示
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_today"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "🔄 【シフト同期】\n\n"
+            "今日のキャスカンのシフトをエスたまに同期します。\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "sync_week":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_week"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "📆 【今週のシフト一括同期】\n\n"
+            "今週のキャスカンのシフトをエスたまに一括同期します。\n"
+            "実行しますか？\n\n"
+            "⚠️ 数分かかる場合があります。",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "appeal":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:appeal"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="agent_confirm:cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            "📢 【エスたまアピール】\n\n"
+            "ブラウザでエスたまの集客ワンクリックアピールを実行します。\n"
+            "実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif action == "chat_mode":
+        context.user_data["agent_chat_mode"] = True
+        await query.edit_message_text(
+            "💬 【自然言語モード】\n\n"
+            "日本語で指示を入力してください。\n"
+            "AIが意図を解析してブラウザ操作を実行します。\n\n"
+            "💡 例:\n"
+            "「明日りおんを14時から23時でキャスカンに登録して」\n"
+            "「キャスト一覧を見せて」\n"
+            "「エスたまのご案内状況を今すぐにして」\n\n"
+            "終了するには「終了」と入力してください。"
+        )
+
+
+async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エージェント確認コールバック処理"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("agent_confirm:"):
+        return
+
+    action = data.replace("agent_confirm:", "")
+
+    if action == "cancel":
+        await query.edit_message_text("❌ 操作をキャンセルしました。")
+        return
+
+    if action == "sync_today":
+        await query.edit_message_text("⏳ ブラウザでシフト同期を実行中...\nしばらくお待ちください。")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "sync_shifts", "params": {}}'
+            )
+            if len(result) > 4000:
+                result = result[:4000] + "\n..."
+            await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "sync_week":
+        await query.edit_message_text("⏳ 今週のシフトを一括同期中...\n数分かかる場合があります。")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "sync_all_week", "params": {}}'
+            )
+            # 長い場合は分割送信
+            if len(result) > 4000:
+                chunks = _split_text(result, 3800)
+                await query.edit_message_text(chunks[0])
+                for chunk in chunks[1:]:
+                    await query.message.chat.send_message(chunk)
+            else:
+                await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+    elif action == "appeal":
+        await query.edit_message_text("⏳ ブラウザでエスたまアピールを実行中...")
+        try:
+            result = await browser_agent.execute_confirmed(
+                '{"action": "estama_appeal", "params": {}}'
+            )
+            await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+
+async def handle_agent_nlp_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エージェント自然言語操作の確認コールバック"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("agent_nlp:"):
+        return
+
+    action = data.replace("agent_nlp:", "")
+
+    if action == "cancel":
+        context.user_data.pop("agent_pending_action", None)
+        await query.edit_message_text("❌ 操作をキャンセルしました。")
+        return
+
+    if action == "execute":
+        pending = context.user_data.pop("agent_pending_action", None)
+        if not pending:
+            await query.edit_message_text("⚠️ 実行する操作が見つかりません。")
+            return
+
+        await query.edit_message_text("⏳ ブラウザで操作を実行中...\nしばらくお待ちください。")
+        try:
+            result = await browser_agent.execute_confirmed(pending)
+            if len(result) > 4000:
+                chunks = _split_text(result, 3800)
+                await query.edit_message_text(chunks[0])
+                for chunk in chunks[1:]:
+                    await query.message.chat.send_message(chunk)
+            else:
+                await query.edit_message_text(result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
+
+
+async def handle_agent_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """エージェント自然言語モードのメッセージ処理
+
+    Returns:
+        True ならエージェントが処理した、False なら他のハンドラーに委譲
+    """
+    if not context.user_data.get("agent_chat_mode"):
+        return False
+
+    text = update.message.text.strip()
+
+    # 終了コマンド
+    if text in ("終了", "キャンセル", "exit", "quit", "戻る"):
+        context.user_data.pop("agent_chat_mode", None)
+        context.user_data.pop("agent_pending_action", None)
+        await update.message.reply_text(
+            "🤖 エージェントモードを終了しました。",
+            reply_markup=MENU_KEYBOARD,
+        )
+        return True
+
+    # LLMでインテント解析
+    await update.message.reply_text("🧠 AIが指示を解析中...")
+
+    try:
+        confirmation, action_json = await browser_agent.process_agent_command(text)
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ 解析エラー: {str(e)[:300]}\n\n"
+            "もう一度入力してください。",
+        )
+        return True
+
+    import json as _json
+    try:
+        intent = _json.loads(action_json)
+    except Exception:
+        intent = {}
+
+    action_name = intent.get("action", "")
+    actions_list = intent.get("actions", [])
+
+    # 読み取り系の操作は確認なしで即実行
+    read_actions = {
+        "caskan_get_shifts", "caskan_get_casts", "caskan_get_rooms",
+        "estama_get_schedule", "estama_get_therapists", "unknown",
+    }
+
+    is_read_only = (
+        action_name in read_actions
+        or (actions_list and all(a.get("action") in read_actions for a in actions_list))
+    )
+
+    if is_read_only:
+        await update.message.reply_text("⏳ ブラウザで情報を取得中...")
+        try:
+            result = await browser_agent.execute_confirmed(action_json)
+            if len(result) > 4000:
+                chunks = _split_text(result, 3800)
+                for chunk in chunks:
+                    await update.message.reply_text(chunk)
+            else:
+                await update.message.reply_text(result)
+        except Exception as e:
+            await update.message.reply_text(f"❌ 実行エラー: {str(e)[:300]}")
+    else:
+        # 書き込み系は確認を求める
+        context.user_data["agent_pending_action"] = action_json
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ 実行する", callback_data="agent_nlp:execute"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="agent_nlp:cancel"),
+            ]
+        ]
+        await update.message.reply_text(
+            f"🤖 【操作確認】\n\n{confirmation}\n\n実行しますか？",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    return True
+
+# ─── その他 ──────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """未知のテキストメッセージ"""
     text = update.message.text.strip() if update.message.text else ""
+
+    # エージェントチャットモードの場合
+    if context.user_data.get("agent_chat_mode"):
+        handled = await handle_agent_chat(update, context)
+        if handled:
+            return
 
     # SEOキーワード入力待ちの場合
     if context.user_data.get("seo_awaiting_keyword"):
@@ -1454,6 +1753,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^🌟 エスたま$"), handle_estama_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^✍️ SEO記事作成$"), handle_seo_menu))
     app.add_handler(CommandHandler("seo", handle_seo_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
+    app.add_handler(CommandHandler("agent", handle_agent_menu))
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -1467,6 +1768,9 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
     app.add_handler(CallbackQueryHandler(handle_diary_back_callback, pattern=r"^diary:back$"))
     app.add_handler(CallbackQueryHandler(handle_seo_callback, pattern=r"^seo:"))
+    app.add_handler(CallbackQueryHandler(handle_agent_callback, pattern=r"^agent:"))
+    app.add_handler(CallbackQueryHandler(handle_agent_confirm_callback, pattern=r"^agent_confirm:"))
+    app.add_handler(CallbackQueryHandler(handle_agent_nlp_confirm_callback, pattern=r"^agent_nlp:"))
 
     # その他のテキストメッセージ（最後に登録）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
@@ -1478,6 +1782,7 @@ def main() -> None:
             BotCommand("news", "ニュース投稿文面を生成"),
             BotCommand("images", "画像管理"),
             BotCommand("seo", "SEO記事ドラフトを生成"),
+            BotCommand("agent", "AIブラウザエージェント"),
         ])
         logger.info("Telegramコマンドメニューを更新しました")
 
