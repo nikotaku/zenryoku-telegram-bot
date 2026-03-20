@@ -2,7 +2,7 @@
 """
 bitbank API クライアント
 bitbank（仮想通貨取引所）のプライベートAPIを使って
-保有資産（ポートフォリオ）情報を取得する。
+保有資産（ポートフォリオ）の取得および注文（成行・指値）を行う。
 
 認証方式: ACCESS-TIME-WINDOW + HMAC-SHA256
 API ドキュメント: https://github.com/bitbankinc/bitbank-api-docs/blob/master/rest-api.md
@@ -11,6 +11,7 @@ API ドキュメント: https://github.com/bitbankinc/bitbank-api-docs/blob/mast
 import os
 import time
 import hmac
+import json
 import hashlib
 import logging
 import requests
@@ -94,7 +95,7 @@ ASSET_NAMES = {
     "melania": "メラニア",
 }
 
-# JPYペアを持つ通貨（価格取得用）
+# JPYペアを持つ通貨（価格取得・取引用）
 JPY_PAIRS = {
     "btc":   "btc_jpy",
     "eth":   "eth_jpy",
@@ -162,6 +163,77 @@ JPY_PAIRS = {
     "melania": "melania_jpy",
 }
 
+# 通貨ごとの数量小数点桁数（成行注文の数量フォーマット用）
+# bitbank の amount_precision に準拠
+AMOUNT_PRECISION = {
+    "btc":   4,
+    "eth":   4,
+    "xrp":   2,
+    "ltc":   4,
+    "mona":  4,
+    "bcc":   4,
+    "xlm":   2,
+    "qtum":  4,
+    "bat":   2,
+    "omg":   4,
+    "xym":   2,
+    "link":  4,
+    "mkr":   4,
+    "boba":  2,
+    "enj":   2,
+    "matic": 2,
+    "dot":   4,
+    "doge":  2,
+    "astr":  2,
+    "ada":   2,
+    "avax":  4,
+    "axs":   4,
+    "flr":   2,
+    "sand":  2,
+    "gala":  2,
+    "chz":   2,
+    "ape":   4,
+    "sol":   4,
+    "fil":   4,
+    "mana":  2,
+    "algo":  2,
+    "near":  4,
+    "ens":   4,
+    "sui":   4,
+    "arb":   4,
+    "op":    4,
+    "wbtc":  4,
+    "atom":  4,
+    "apt":   4,
+    "imx":   4,
+    "sei":   2,
+    "rndr":  4,
+    "fet":   4,
+    "wld":   4,
+    "pepe":  0,
+    "bonk":  0,
+    "ordi":  4,
+    "blur":  2,
+    "pyth":  2,
+    "jup":   2,
+    "strk":  4,
+    "w":     2,
+    "tnsr":  2,
+    "not":   0,
+    "zk":    0,
+    "zro":   4,
+    "pol":   2,
+    "eigen": 4,
+    "hype":  4,
+    "virtual": 2,
+    "ai16z": 2,
+    "arc":   2,
+    "trump": 4,
+    "melania": 2,
+}
+
+
+# ─── 認証ヘルパー ──────────────────────────────────────────────────────────
 
 def _make_signature(secret: str, message: str) -> str:
     """HMAC-SHA256署名を生成する"""
@@ -174,8 +246,7 @@ def _make_signature(secret: str, message: str) -> str:
 
 def _private_get(path: str, params: Optional[dict] = None) -> Optional[dict]:
     """
-    bitbank プライベートAPI GET リクエスト
-    ACCESS-TIME-WINDOW 方式で認証する
+    bitbank プライベートAPI GET リクエスト（ACCESS-TIME-WINDOW方式）
     """
     if not BITBANK_API_KEY or not BITBANK_API_SECRET:
         logger.error("BITBANK_API_KEY または BITBANK_API_SECRET が設定されていません")
@@ -184,14 +255,11 @@ def _private_get(path: str, params: Optional[dict] = None) -> Optional[dict]:
     access_request_time = str(int(time.time() * 1000))
     access_time_window = "5000"
 
-    # クエリ文字列を構築
     query_string = ""
     if params:
         query_string = "?" + "&".join(f"{k}={v}" for k, v in params.items())
 
     full_path = f"/v1{path}{query_string}"
-
-    # 署名メッセージ: ACCESS-REQUEST-TIME + ACCESS-TIME-WINDOW + full_path
     message = access_request_time + access_time_window + full_path
     signature = _make_signature(BITBANK_API_SECRET, message)
 
@@ -213,11 +281,52 @@ def _private_get(path: str, params: Optional[dict] = None) -> Optional[dict]:
         else:
             error_code = data.get("data", {}).get("code", "unknown")
             logger.error(f"bitbank API エラー: code={error_code}, path={path}")
-            return None
+            return {"_error_code": error_code}
     except requests.RequestException as e:
         logger.error(f"bitbank API リクエストエラー: {e}")
         return None
 
+
+def _private_post(path: str, body: dict) -> Optional[dict]:
+    """
+    bitbank プライベートAPI POST リクエスト（ACCESS-TIME-WINDOW方式）
+    """
+    if not BITBANK_API_KEY or not BITBANK_API_SECRET:
+        logger.error("BITBANK_API_KEY または BITBANK_API_SECRET が設定されていません")
+        return None
+
+    access_request_time = str(int(time.time() * 1000))
+    access_time_window = "5000"
+
+    body_str = json.dumps(body, separators=(",", ":"))
+    message = access_request_time + access_time_window + body_str
+    signature = _make_signature(BITBANK_API_SECRET, message)
+
+    headers = {
+        "ACCESS-KEY": BITBANK_API_KEY,
+        "ACCESS-SIGNATURE": signature,
+        "ACCESS-REQUEST-TIME": access_request_time,
+        "ACCESS-TIME-WINDOW": access_time_window,
+        "Content-Type": "application/json",
+    }
+
+    url = PRIVATE_BASE_URL + path
+    try:
+        resp = requests.post(url, headers=headers, data=body_str, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("success") == 1:
+            return data.get("data")
+        else:
+            error_code = data.get("data", {}).get("code", "unknown")
+            logger.error(f"bitbank API POST エラー: code={error_code}, path={path}, body={body_str}")
+            return {"_error_code": error_code}
+    except requests.RequestException as e:
+        logger.error(f"bitbank API POST リクエストエラー: {e}")
+        return None
+
+
+# ─── パブリック API ────────────────────────────────────────────────────────
 
 def get_ticker(pair: str) -> Optional[dict]:
     """
@@ -237,46 +346,150 @@ def get_ticker(pair: str) -> Optional[dict]:
         return None
 
 
+# ─── プライベート API（資産） ─────────────────────────────────────────────
+
 def get_assets() -> Optional[list]:
     """
     保有資産一覧を取得する
     Returns: assets リスト or None
     """
     data = _private_get("/user/assets")
-    if data is None:
+    if data is None or "_error_code" in data:
         return None
     return data.get("assets", [])
 
 
-def get_portfolio() -> Optional[dict]:
+def get_asset_free_amount(asset: str) -> Optional[float]:
+    """
+    指定通貨の利用可能残高を返す
+    """
+    assets = get_assets()
+    if assets is None:
+        return None
+    for a in assets:
+        if a.get("asset") == asset:
+            try:
+                return float(a.get("free_amount", "0"))
+            except (ValueError, TypeError):
+                return 0.0
+    return 0.0
+
+
+# ─── プライベート API（注文） ─────────────────────────────────────────────
+
+def place_market_order(asset: str, side: str, amount: float) -> dict:
+    """
+    成行注文を発注する。
+
+    Args:
+        asset: 通貨シンボル (例: "xrp")
+        side:  "buy" または "sell"
+        amount: 注文数量（通貨単位）
+
+    Returns:
+        {
+            "success": bool,
+            "order_id": int or None,
+            "pair": str,
+            "side": str,
+            "amount": str,
+            "status": str,
+            "error_code": int or None,
+            "error_message": str or None,
+        }
+    """
+    pair = JPY_PAIRS.get(asset.lower())
+    if not pair:
+        return {
+            "success": False,
+            "order_id": None,
+            "error_code": None,
+            "error_message": f"通貨 {asset.upper()} はJPYペアに対応していません",
+        }
+
+    precision = AMOUNT_PRECISION.get(asset.lower(), 4)
+    amount_str = f"{amount:.{precision}f}" if precision > 0 else f"{int(amount)}"
+
+    body = {
+        "pair": pair,
+        "amount": amount_str,
+        "side": side,
+        "type": "market",
+    }
+
+    data = _private_post("/user/spot/order", body)
+
+    if data is None:
+        return {
+            "success": False,
+            "order_id": None,
+            "error_code": None,
+            "error_message": "APIリクエストに失敗しました（ネットワークエラー）",
+        }
+
+    if "_error_code" in data:
+        error_code = data["_error_code"]
+        error_messages = {
+            70020: "サーキットブレーカー発動中のため成行注文は受け付けられません",
+            70001: "注文数量が不正です",
+            70002: "注文価格が不正です",
+            70003: "残高が不足しています",
+            70009: "注文が存在しません",
+            70011: "注文数量が最小値を下回っています",
+            70012: "注文数量が最大値を超えています",
+            70013: "注文価格が最小値を下回っています",
+            70014: "注文価格が最大値を超えています",
+            70016: "取引が停止されています",
+        }
+        msg = error_messages.get(error_code, f"APIエラー (code: {error_code})")
+        return {
+            "success": False,
+            "order_id": None,
+            "error_code": error_code,
+            "error_message": msg,
+        }
+
+    return {
+        "success": True,
+        "order_id": data.get("order_id"),
+        "pair": data.get("pair", pair),
+        "side": data.get("side", side),
+        "amount": data.get("start_amount", amount_str),
+        "executed_amount": data.get("executed_amount", "0"),
+        "average_price": data.get("average_price", "0"),
+        "status": data.get("status", "UNKNOWN"),
+        "ordered_at": data.get("ordered_at"),
+        "error_code": None,
+        "error_message": None,
+    }
+
+
+def get_order_status(pair: str, order_id: int) -> Optional[dict]:
+    """
+    注文ステータスを取得する
+    """
+    data = _private_get("/user/spot/order", {"pair": pair, "order_id": order_id})
+    if data is None or "_error_code" in data:
+        return None
+    return data
+
+
+# ─── ポートフォリオ ────────────────────────────────────────────────────────
+
+def get_portfolio() -> dict:
     """
     保有資産のポートフォリオ情報を取得・計算して返す。
 
     Returns:
         {
-            "total_jpy": float,          # 総評価額（JPY）
-            "assets": [
-                {
-                    "asset": str,        # 通貨シンボル (例: "btc")
-                    "name": str,         # 日本語名
-                    "amount": float,     # 保有数量（onhand_amount）
-                    "free_amount": float,# 利用可能数量
-                    "price_jpy": float,  # 現在価格（JPY）
-                    "value_jpy": float,  # 評価額（JPY）
-                    "precision": int,    # 数量の小数点以下桁数
-                },
-                ...
-            ],
+            "total_jpy": float,
+            "assets": [ { "asset", "name", "amount", "free_amount",
+                          "price_jpy", "value_jpy", "precision" }, ... ],
             "error": None or str,
         }
     """
-    result = {
-        "total_jpy": 0.0,
-        "assets": [],
-        "error": None,
-    }
+    result = {"total_jpy": 0.0, "assets": [], "error": None}
 
-    # 資産一覧を取得
     assets = get_assets()
     if assets is None:
         result["error"] = "API認証エラー: BITBANK_API_KEY / BITBANK_API_SECRET を確認してください"
@@ -298,16 +511,13 @@ def get_portfolio() -> Optional[dict]:
             onhand_amount = 0.0
             free_amount = 0.0
 
-        # 保有量が0の場合はスキップ
         if onhand_amount <= 0:
             continue
 
-        # JPYはそのまま評価額
         if asset == "jpy":
             value_jpy = onhand_amount
             price_jpy = 1.0
         else:
-            # ティッカーから現在価格を取得
             pair = JPY_PAIRS.get(asset)
             if pair:
                 ticker = get_ticker(pair)
@@ -320,11 +530,9 @@ def get_portfolio() -> Optional[dict]:
                     price_jpy = 0.0
             else:
                 price_jpy = 0.0
-
             value_jpy = onhand_amount * price_jpy
 
         total_jpy += value_jpy
-
         name = ASSET_NAMES.get(asset, asset.upper())
         portfolio_assets.append({
             "asset": asset,
@@ -336,21 +544,19 @@ def get_portfolio() -> Optional[dict]:
             "precision": precision,
         })
 
-    # 評価額の大きい順にソート（JPYを先頭に）
     jpy_assets = [a for a in portfolio_assets if a["asset"] == "jpy"]
-    other_assets = [a for a in portfolio_assets if a["asset"] != "jpy"]
-    other_assets.sort(key=lambda x: x["value_jpy"], reverse=True)
+    other_assets = sorted(
+        [a for a in portfolio_assets if a["asset"] != "jpy"],
+        key=lambda x: x["value_jpy"], reverse=True
+    )
 
     result["assets"] = jpy_assets + other_assets
     result["total_jpy"] = total_jpy
-
     return result
 
 
 def format_portfolio_message(portfolio: dict) -> str:
-    """
-    ポートフォリオ情報をTelegramメッセージ用にフォーマットする
-    """
+    """ポートフォリオ情報をTelegramメッセージ用にフォーマットする"""
     if portfolio.get("error"):
         return f"❌ エラー: {portfolio['error']}"
 
@@ -358,10 +564,7 @@ def format_portfolio_message(portfolio: dict) -> str:
     total_jpy = portfolio.get("total_jpy", 0.0)
 
     if not assets:
-        return (
-            "💰 【仮想通貨ポートフォリオ】\n\n"
-            "保有資産はありません。"
-        )
+        return "💰 【仮想通貨ポートフォリオ】\n\n保有資産はありません。"
 
     lines = ["💰 【仮想通貨ポートフォリオ】\n"]
 
@@ -373,34 +576,27 @@ def format_portfolio_message(portfolio: dict) -> str:
         value_jpy = asset_data["value_jpy"]
         precision = asset_data["precision"]
 
-        # 通貨シンボルと名前
-        lines.append(f"━━━━━━━━━━━━━━━━")
+        lines.append("━━━━━━━━━━━━━━━━")
         lines.append(f"🪙 {asset.upper()} ({name})")
 
         if asset == "jpy":
             lines.append(f"  残高: ¥{amount:,.0f}")
         else:
-            # 保有数量（精度に応じてフォーマット）
             if precision <= 0:
                 amount_str = f"{amount:,.0f}"
             elif precision <= 4:
                 amount_str = f"{amount:,.{precision}f}"
             else:
-                # 末尾ゼロを除去
                 amount_str = f"{amount:.{precision}f}".rstrip("0").rstrip(".")
 
             lines.append(f"  保有数量: {amount_str} {asset.upper()}")
 
             if price_jpy > 0:
-                # 価格フォーマット（1円未満は小数点表示）
-                if price_jpy >= 1:
-                    price_str = f"¥{price_jpy:,.2f}"
-                else:
-                    price_str = f"¥{price_jpy:.6f}"
+                price_str = f"¥{price_jpy:,.2f}" if price_jpy >= 1 else f"¥{price_jpy:.6f}"
                 lines.append(f"  現在価格: {price_str}")
                 lines.append(f"  評価額:   ¥{value_jpy:,.0f}")
             else:
-                lines.append(f"  評価額:   価格取得不可")
+                lines.append("  評価額:   価格取得不可")
 
     lines.append("━━━━━━━━━━━━━━━━")
     lines.append(f"\n📊 総評価額: ¥{total_jpy:,.0f}")
