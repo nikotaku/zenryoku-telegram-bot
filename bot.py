@@ -49,6 +49,7 @@ from seo_article import (
 )
 
 import browser_agent
+from bitbank_client import get_portfolio, format_portfolio_message
 
 # ─── 設定 ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -74,7 +75,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
         [KeyboardButton("✍️ SEO記事作成")],
-        [KeyboardButton("🤖 エージェント")],
+        [KeyboardButton("💰 仮想通貨"), KeyboardButton("🤖 エージェント")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -932,6 +933,66 @@ def _split_text(text: str, max_length: int) -> list:
         chunks.append(current)
     return chunks
 
+# ─── 💰 仮想通貨（bitbank ポートフォリオ）────────────────────
+
+async def handle_crypto_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """仮想通貨メニューを表示"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 ポートフォリオを表示", callback_data="crypto:portfolio"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "💰 【仮想通貨】\n\n"
+        "bitbank の保有資産情報を確認できます。\n"
+        "メニューから操作を選択してください。",
+        reply_markup=reply_markup,
+    )
+
+
+async def handle_crypto_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """仮想通貨コールバック処理"""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("crypto:"):
+        return
+
+    action = data.replace("crypto:", "")
+
+    if action == "portfolio":
+        await query.edit_message_text("⏳ bitbank から保有資産を取得中...\nしばらくお待ちください。")
+
+        try:
+            portfolio = get_portfolio()
+            message = format_portfolio_message(portfolio)
+
+            # Telegramの文字数制限（4096文字）対策
+            if len(message) > 4096:
+                message = message[:4090] + "\n..."
+
+            # 更新ボタンを追加
+            keyboard = [
+                [
+                    InlineKeyboardButton("🔄 更新", callback_data="crypto:portfolio"),
+                ],
+            ]
+            await query.edit_message_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        except Exception as e:
+            logger.error(f"仮想通貨ポートフォリオ取得エラー: {e}")
+            await query.edit_message_text(
+                f"❌ ポートフォリオの取得に失敗しました。\n\n"
+                f"エラー: {str(e)[:200]}\n\n"
+                "BITBANK_API_KEY と BITBANK_API_SECRET が正しく設定されているか確認してください。"
+            )
+
+
 # ─── 🤖 エージェント（ブラウザ自動操作）─────────────────────
 
 async def handle_agent_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1204,6 +1265,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^📓 写メ日記$"), handle_photo_diary))
     app.add_handler(MessageHandler(filters.Regex(r"^✍️ SEO記事作成$"), handle_seo_menu))
     app.add_handler(CommandHandler("seo", handle_seo_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^💰 仮想通貨$"), handle_crypto_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
     app.add_handler(CommandHandler("agent", handle_agent_menu))
 
@@ -1216,6 +1278,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
     app.add_handler(CallbackQueryHandler(handle_diary_back_callback, pattern=r"^diary:back$"))
     app.add_handler(CallbackQueryHandler(handle_seo_callback, pattern=r"^seo:"))
+    app.add_handler(CallbackQueryHandler(handle_crypto_callback, pattern=r"^crypto:"))
     app.add_handler(CallbackQueryHandler(handle_agent_callback, pattern=r"^agent:"))
     app.add_handler(CallbackQueryHandler(handle_agent_confirm_callback, pattern=r"^agent_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_agent_nlp_confirm_callback, pattern=r"^agent_nlp:"))
