@@ -1,0 +1,29 @@
+services:
+  - type: worker
+    name: zenryoku-telegram-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: BITBANK_API_KEY
+        sync: false
+      - key: BITBANK_API_SECRET
+        sync: false
+      - key: CASKAN_LOGIN_ID
+        sync: false
+      - key: CASKAN_PASSWORD
+        sync: false
+      - key: CASKAN_SHOP_ID
+        sync: false
+      - key: ESTAMA_LOGIN_ID
+        sync: false
+      - key: ESTAMA_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: NOTION_API_KEY
+        sync: false
+      - key: NOTION_SHIFT_DB_ID
+        sync: false
