@@ -47,6 +47,8 @@ from seo_article import (
 )
 
 import browser_agent
+import notion_shift_client
+from datetime import datetime
 from bitbank_client import (
     get_portfolio,
     format_portfolio_message,
@@ -1421,9 +1423,9 @@ async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT
     if action == "today":
         await query.edit_message_text("⏳ NotionシフトDBから今日のシフトを取得中...")
         try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "notion_get_shifts", "params": {}}'
-            )
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            shifts = notion_shift_client.query_shifts(date_str=today_str)
+            result = notion_shift_client.format_shifts_message(shifts, title=f"本日のシフト ({today_str})")
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
             # 戻るボタン付きで表示
@@ -1435,9 +1437,8 @@ async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT
     elif action == "week":
         await query.edit_message_text("⏳ NotionシフトDBから今週のシフトを取得中...")
         try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "notion_get_shifts", "params": {"days_range": 6}}'
-            )
+            shifts = notion_shift_client.query_shifts_week()
+            result = notion_shift_client.format_shifts_message(shifts, title="今週のシフト")
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
             keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
@@ -1446,11 +1447,10 @@ async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
     elif action == "pending":
-        await query.edit_message_text("⏳ 未着手シフトを取得中...")
+        await query.edit_message_text("⏳ 未着手のシフトを検索中...")
         try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "notion_get_pending", "params": {"target": "caskan"}}'
-            )
+            shifts = notion_shift_client.query_pending_shifts(target="caskan")
+            result = notion_shift_client.format_shifts_message(shifts, title="未登録シフト")
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
             keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
