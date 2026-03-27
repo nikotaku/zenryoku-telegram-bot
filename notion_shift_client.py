@@ -115,7 +115,7 @@ def query_shifts(
     body = {
         "sorts": [
             {"property": "日付", "direction": "ascending"},
-            {"property": "開始時間", "direction": "ascending"},
+            {"property": "IN", "direction": "ascending"},
         ],
     }
 
@@ -257,19 +257,19 @@ def _parse_shift_page(page: dict) -> dict:
         room = room_prop["select"].get("name", "")
 
     # 開始時間
-    start_prop = props.get("開始時間", {})
+    start_prop = props.get("IN", {})
     start = ""
     if start_prop.get("type") == "select" and start_prop.get("select"):
         start = start_prop["select"].get("name", "")
 
     # 終了時間
-    end_prop = props.get("終了時間", {})
+    end_prop = props.get("OUT", {})
     end = ""
     if end_prop.get("type") == "select" and end_prop.get("select"):
         end = end_prop["select"].get("name", "")
 
     # 条件
-    condition_prop = props.get("条件", {})
+    condition_prop = props.get("条件", {}) # Missing in new DB
     condition = ""
     if condition_prop.get("type") == "rich_text":
         texts = condition_prop.get("rich_text", [])
