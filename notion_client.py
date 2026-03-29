@@ -35,8 +35,58 @@ DEFAULT_THERAPIST_MAP = {
 }
 
 
+
+import time
+import requests
+
+NOTION_MASTER_DB_ID = os.environ.get("NOTION_MASTER_DB_ID", "")
+_therapist_cache = {}
+_therapist_cache_time = 0
+
+def _fetch_therapist_map_from_notion():
+    if not NOTION_MASTER_DB_ID:
+        return DEFAULT_THERAPIST_MAP
+    
+    url = f"https://api.notion.com/v1/databases/{NOTION_MASTER_DB_ID}/query"
+    body = {
+        "filter": {
+            "or": [
+                {"property": "タグ", "multi_select": {"contains": "在籍セラピスト"}},
+                {"property": "タグ", "multi_select": {"contains": "出稼ぎセラピスト"}}
+            ]
+        }
+    }
+    try:
+        resp = requests.post(url, headers=_headers(), json=body, timeout=10)
+        if resp.status_code != 200:
+            logger.error(f"マスタDB取得エラー: {resp.text}")
+            return DEFAULT_THERAPIST_MAP
+            
+        data = resp.json()
+        new_map = {}
+        for page in data.get("results", []):
+            tags = [t["name"] for t in page["properties"].get("タグ", {}).get("multi_select", [])]
+            if "派遣終了・退店" in tags:
+                continue
+            
+            title_prop = page["properties"].get("名前", {}).get("title", [])
+            if title_prop:
+                full_name = title_prop[0].get("plain_text", "")
+                short_name = full_name.split("/")[0].strip()
+                if short_name:
+                    new_map[short_name] = page["id"]
+        
+        if new_map:
+            return new_map
+        return DEFAULT_THERAPIST_MAP
+    except Exception as e:
+        logger.error(f"マスタDB取得エラー: {e}")
+        return DEFAULT_THERAPIST_MAP
+
 def _get_therapist_map():
-    """セラピストマップを取得（環境変数で上書き可能）"""
+    global _therapist_cache, _therapist_cache_time
+    
+    # 環境変数での強制上書きチェック
     import json
     custom = os.environ.get("THERAPIST_MAP")
     if custom:
@@ -44,8 +94,14 @@ def _get_therapist_map():
             return json.loads(custom)
         except Exception:
             pass
-    return DEFAULT_THERAPIST_MAP
 
+    # キャッシュの有効期限(10分)をチェック
+    now = time.time()
+    if not _therapist_cache or (now - _therapist_cache_time > 600):
+        _therapist_cache = _fetch_therapist_map_from_notion()
+        _therapist_cache_time = now
+
+    return _therapist_cache
 
 def get_therapist_list():
     """セラピスト名のリストを返す"""
@@ -203,3 +259,29 @@ def append_expense_to_page(
     except Exception as e:
         logger.error(f"Notion API 接続エラー: {e}")
         return False
+
+def get_page_image(page_id: str) -> str | None:
+    """
+    Notionページ内の最初の画像ブロックのURLを取得する。
+    """
+    if not NOTION_API_KEY:
+        return None
+
+    try:
+        url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+        resp = requests.get(url, headers=_headers(), timeout=30)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            for block in data.get("results", []):
+                if block.get("type") == "image":
+                    image_obj = block.get("image", {})
+                    # 外部URLかNotionホストURLか判定
+                    if "external" in image_obj:
+                        return image_obj["external"].get("url")
+                    elif "file" in image_obj:
+                        return image_obj["file"].get("url")
+        return None
+    except Exception as e:
+        logger.error(f"Notionからの画像取得エラー: {e}")
+        return None
