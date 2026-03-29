@@ -248,7 +248,10 @@ def _parse_shift_page(page: dict) -> dict:
     date_prop = props.get("日付", {})
     date_str = ""
     if date_prop.get("type") == "date" and date_prop.get("date"):
-        date_str = date_prop["date"].get("start", "")
+        raw_date = date_prop["date"].get("start", "")
+        # "2026-03-30T05:00:00.000+00:00" のような形式から日付部分(先頭10文字)だけを抽出
+        if raw_date:
+            date_str = raw_date[:10]
 
     # ルーム
     room_prop = props.get("ルーム", {})
