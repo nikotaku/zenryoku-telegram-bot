@@ -332,3 +332,65 @@ def format_shifts_message(shifts: list[dict], title: str = "シフト一覧") ->
     )
 
     return text
+
+def create_shift(name: str, date_str: str, start_time: str, end_time: str, room: str = "") -> str | None:
+    """
+    NotionのシフトDBに新しいシフトを登録する。
+    """
+    if not NOTION_API_KEY:
+        logger.error("NOTION_API_KEY が設定されていません")
+        return None
+
+    url = "https://api.notion.com/v1/pages"
+
+    props = {
+        "タイトル": {"title": [{"text": {"content": name}}]},
+        "日付": {"date": {"start": date_str}},
+    }
+    
+    if start_time:
+        props["IN"] = {"select": {"name": start_time}}
+    if end_time:
+        props["OUT"] = {"select": {"name": end_time}}
+    if room:
+        props["ルーム"] = {"select": {"name": room}}
+    
+    # ｼﾌﾄﾁｪｯｸを未着手に設定
+    props["ｼﾌﾄﾁｪｯｸ"] = {"status": {"name": STATUS_NOT_STARTED}}
+
+    payload = {
+        "parent": {"database_id": SHIFT_DB_ID},
+        "properties": props
+    }
+
+    try:
+        import requests
+        resp = requests.post(url, headers=_headers(), json=payload, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            logger.info(f"シフト作成成功: {name} {date_str} {start_time}-{end_time}")
+            return data.get("id")
+        else:
+            logger.error(f"シフト作成失敗: {resp.status_code} {resp.text}")
+            return None
+    except Exception as e:
+        logger.error(f"シフト作成エラー: {e}")
+        return None
+
+def delete_shift(page_id: str) -> bool:
+    """
+    Notionのシフトを削除（ゴミ箱へ移動）する。
+    """
+    if not NOTION_API_KEY:
+        return False
+    
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    payload = {"archived": True}
+    
+    try:
+        import requests
+        resp = requests.patch(url, headers=_headers(), json=payload, timeout=30)
+        return resp.status_code == 200
+    except Exception as e:
+        logger.error(f"シフト削除エラー: {e}")
+        return False
