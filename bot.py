@@ -256,7 +256,7 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
 
     # 画像をアップロードしてURLを取得
     bot = context.bot
-    image_url = await upload_telegram_photo(bot, file_id)
+    image_url = await upload_telegram_photo(bot, file_id, therapist_name)
 
     if not image_url:
         await query.edit_message_text("❌ 画像のアップロードに失敗しました。")
