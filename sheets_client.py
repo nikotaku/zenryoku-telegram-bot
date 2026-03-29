@@ -50,6 +50,8 @@ def _get_credentials():
         sa_json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
         if sa_json_str:
             sa_info = json.loads(sa_json_str)
+            if isinstance(sa_info, str):
+                sa_info = json.loads(sa_info)
             creds = service_account.Credentials.from_service_account_info(
                 sa_info, scopes=SCOPES
             )

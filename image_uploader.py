@@ -33,6 +33,9 @@ def _get_drive_service():
         return None
     try:
         sa_info = json.loads(sa_json_str)
+        if isinstance(sa_info, str):
+            sa_info = json.loads(sa_info)
+        
         creds = service_account.Credentials.from_service_account_info(
             sa_info, scopes=["https://www.googleapis.com/auth/drive"]
         )
