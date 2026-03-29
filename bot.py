@@ -74,6 +74,52 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
+# ─── 出稼ぎスケジュール登録 ConversationHandler ステート ────────────────
+GUEST_NAME, GUEST_START_DATE, GUEST_END_DATE, GUEST_START_TIME, GUEST_END_TIME, GUEST_EXPENSE, GUEST_X_ACCOUNT = range(10, 17)
+
+def get_calendar_keyboard(year: int, month: int, prefix: str):
+    import calendar
+    keyboard = []
+    
+    # ヘッダー (年月)
+    keyboard.append([
+        InlineKeyboardButton("<", callback_data=f"{prefix}:prev:{year}:{month}"),
+        InlineKeyboardButton(f"{year}年{month}月", callback_data="ignore"),
+        InlineKeyboardButton(">", callback_data=f"{prefix}:next:{year}:{month}")
+    ])
+    
+    # 曜日
+    week_days = ["月", "火", "水", "木", "金", "土", "日"]
+    keyboard.append([InlineKeyboardButton(day, callback_data="ignore") for day in week_days])
+    
+    # カレンダー本体
+    cal = calendar.monthcalendar(year, month)
+    for week in cal:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="ignore"))
+            else:
+                date_str = f"{year}-{month:02d}-{day:02d}"
+                row.append(InlineKeyboardButton(str(day), callback_data=f"{prefix}:select:{date_str}"))
+        keyboard.append(row)
+        
+    return InlineKeyboardMarkup(keyboard)
+
+def get_time_keyboard(prefix: str):
+    keyboard = []
+    times = ["11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00", "24:00", "25:00", "26:00"]
+    row = []
+    for t in times:
+        row.append(InlineKeyboardButton(t, callback_data=f"{prefix}:select:{t}"))
+        if len(row) == 4:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    return InlineKeyboardMarkup(keyboard)
+
 # ─── 経費入力 ConversationHandler ステート ────────────────
 EXPENSE_DATE, EXPENSE_AMOUNT, EXPENSE_CONTENT, EXPENSE_MEMO = range(4)
 
@@ -84,7 +130,8 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
         [KeyboardButton("✍️ SEO記事作成")],
-        [KeyboardButton("💰 仮想通貨"), KeyboardButton("🤖 エージェント")],
+        [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
+        [KeyboardButton("💰 仮想通貨")],
         [KeyboardButton("📅 シフトDB")],
     ],
     resize_keyboard=True,
@@ -441,6 +488,327 @@ async def handle_diary_back_callback(update: Update, context: ContextTypes.DEFAU
         reply_markup=reply_markup,
     )
 
+
+
+# ─── 出稼ぎスケジュール登録ハンドラー ─────────────────────────────────────
+async def guest_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()  # リセット
+    
+    therapists = get_therapist_list()
+    keyboard = []
+    row = []
+    for name in therapists:
+        row.append(InlineKeyboardButton(name, callback_data=f"guest_name:{name}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="guest_name:cancel")])
+    
+    await update.message.reply_text(
+        "💼 【出稼ぎスケジュール登録】\n\n"
+        "登録するセラピスト（源氏名）を選択してください：",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return GUEST_NAME
+
+async def guest_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    if not query.data.startswith("guest_name:"):
+        return GUEST_NAME
+        
+    name = query.data.replace("guest_name:", "")
+    if name == "cancel":
+        await query.edit_message_text("❌ 登録をキャンセルしました。")
+        return ConversationHandler.END
+        
+    context.user_data["guest_name"] = name
+    
+    now = datetime.now()
+    keyboard = get_calendar_keyboard(now.year, now.month, "guest_start_date")
+    
+    await query.edit_message_text(
+        f"✅ 選択: {name}\n\n"
+        "次に、【開始日】をカレンダーから選択してください：",
+        reply_markup=keyboard
+    )
+    return GUEST_START_DATE
+
+async def guest_start_date_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split(":")
+    if len(data) < 3 or data[0] != "guest_start_date":
+        return GUEST_START_DATE
+        
+    action = data[1]
+    
+    if action in ["prev", "next"]:
+        year, month = int(data[2]), int(data[3])
+        if action == "prev":
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+        else:
+            month += 1
+            if month == 13:
+                month = 1
+                year += 1
+        keyboard = get_calendar_keyboard(year, month, "guest_start_date")
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        return GUEST_START_DATE
+        
+    elif action == "select":
+        date_str = data[2]
+        context.user_data["guest_start_date"] = date_str
+        
+        # 終了日選択へ
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+        keyboard = get_calendar_keyboard(d.year, d.month, "guest_end_date")
+        await query.edit_message_text(
+            f"✅ 開始日: {date_str}\n\n"
+            "次に、【終了日】をカレンダーから選択してください：",
+            reply_markup=keyboard
+        )
+        return GUEST_END_DATE
+        
+    return GUEST_START_DATE
+
+async def guest_end_date_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split(":")
+    if len(data) < 3 or data[0] != "guest_end_date":
+        return GUEST_END_DATE
+        
+    action = data[1]
+    
+    if action in ["prev", "next"]:
+        year, month = int(data[2]), int(data[3])
+        if action == "prev":
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+        else:
+            month += 1
+            if month == 13:
+                month = 1
+                year += 1
+        keyboard = get_calendar_keyboard(year, month, "guest_end_date")
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        return GUEST_END_DATE
+        
+    elif action == "select":
+        date_str = data[2]
+        context.user_data["guest_end_date"] = date_str
+        
+        keyboard = get_time_keyboard("guest_in_time")
+        await query.edit_message_text(
+            f"✅ 終了日: {date_str}\n\n"
+            "次に、【出勤時間(IN)】を選択してください：",
+            reply_markup=keyboard
+        )
+        return GUEST_START_TIME
+        
+    return GUEST_END_DATE
+
+async def guest_in_time_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split(":")
+    if len(data) < 3 or data[0] != "guest_in_time":
+        return GUEST_START_TIME
+        
+    in_time = data[2]
+    context.user_data["guest_in_time"] = in_time
+    
+    keyboard = get_time_keyboard("guest_out_time")
+    await query.edit_message_text(
+        f"✅ IN: {in_time}\n\n"
+        "次に、【退勤時間(OUT)】を選択してください：",
+        reply_markup=keyboard
+    )
+    return GUEST_END_TIME
+
+async def guest_out_time_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split(":")
+    if len(data) < 3 or data[0] != "guest_out_time":
+        return GUEST_END_TIME
+        
+    out_time = data[2]
+    context.user_data["guest_out_time"] = out_time
+    
+    # テキスト入力に切り替え
+    await query.edit_message_text(
+        f"✅ OUT: {out_time}\n\n"
+        "次に、【交通費支給金額】をチャットに入力してください。\n"
+        "（例：「上限10,000円」「全額支給」など）\n\n"
+        "※キャンセルする場合は「キャンセル」と入力してください。"
+    )
+    return GUEST_EXPENSE
+
+async def guest_expense_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if text == "キャンセル":
+        await update.message.reply_text("❌ 登録をキャンセルしました。", reply_markup=MENU_KEYBOARD)
+        return ConversationHandler.END
+        
+    context.user_data["guest_expense"] = text
+    
+    await update.message.reply_text(
+        "✅ 交通費を記録しました。\n\n"
+        "最後に、【現在使用中のXアカウント】を入力してください。\n"
+        "（例：「@nzm_zr」「なし」など）"
+    )
+    return GUEST_X_ACCOUNT
+
+async def guest_x_account_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if text == "キャンセル":
+        await update.message.reply_text("❌ 登録をキャンセルしました。", reply_markup=MENU_KEYBOARD)
+        return ConversationHandler.END
+        
+    context.user_data["guest_x_account"] = text
+    
+    # 最終確認と出力
+    name = context.user_data["guest_name"]
+    start_d = context.user_data["guest_start_date"]
+    end_d = context.user_data["guest_end_date"]
+    in_time = context.user_data["guest_in_time"]
+    out_time = context.user_data["guest_out_time"]
+    expense = context.user_data["guest_expense"]
+    x_account = context.user_data["guest_x_account"]
+    
+    # 日付のフォーマット変換 (YYYY-MM-DD -> M/D)
+    try:
+        s_date = datetime.strptime(start_d, "%Y-%m-%d")
+        e_date = datetime.strptime(end_d, "%Y-%m-%d")
+        date_str = f"{s_date.month}/{s_date.day}-{e_date.month}/{e_date.day}"
+        days_count = (e_date - s_date).days + 1
+    except:
+        date_str = f"{start_d}〜{end_d}"
+        days_count = 0
+        
+    # メッセージ生成
+    result_text = f"""【派遣詳細(リピート用)】
+
+■源氏名：{name}
+■日程：{date_str}
+■実働：{days_count}日間
+■交通費支給金額：{expense}
+■現在使用中のXアカウント：{x_account}
+(ない場合やログインできない場合は日程確定の段階で作成お願いいたします)
+
+
+-------------------------"""
+    
+    await update.message.reply_text("⏳ NotionのシフトDBに予定を登録中...")
+    
+    # Notionへ登録 (毎日のシフトを作成)
+    import notion_shift_client
+    from datetime import timedelta
+    
+    success_count = 0
+    try:
+        s_date = datetime.strptime(start_d, "%Y-%m-%d")
+        e_date = datetime.strptime(end_d, "%Y-%m-%d")
+        current = s_date
+        while current <= e_date:
+            curr_str = current.strftime("%Y-%m-%d")
+            res = notion_shift_client.create_shift(name, curr_str, in_time, out_time)
+            if res:
+                success_count += 1
+            current += timedelta(days=1)
+            
+        await update.message.reply_text(f"✅ NotionシフトDBに {success_count} 日分のシフト（{in_time}〜{out_time}）を登録しました！")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Notion登録中にエラーが発生しました: {e}")
+        
+    # 最終出力を送信
+    await update.message.reply_text(
+        "完成したフォーマットはこちらです👇 コピーして使ってください！\n\n" + result_text,
+        reply_markup=MENU_KEYBOARD
+    )
+    
+    return ConversationHandler.END
+
+# ─── AI自然言語シフト操作 ─────────────────────────────────────
+async def ai_shift_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "🗣️ 【AIでシフト操作】\n\n"
+        "シフトの追加や削除を、普通の言葉で入力してください。\n"
+        "（例：「明日のさくらのシフトを12時から20時で入れて」「今日のなおのシフトを消して」など）\n\n"
+        "※キャンセルする場合は「キャンセル」と送信してください。"
+    )
+    context.user_data["ai_shift_awaiting"] = True
+
+async def handle_ai_shift_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not context.user_data.get("ai_shift_awaiting"):
+        return False
+        
+    text = update.message.text.strip()
+    context.user_data.pop("ai_shift_awaiting", None)
+    
+    if text == "キャンセル":
+        await update.message.reply_text("❌ キャンセルしました。", reply_markup=MENU_KEYBOARD)
+        return True
+        
+    await update.message.reply_text("🧠 AIが指示を解析中...")
+    
+    import browser_agent
+    try:
+        confirmation, action_json = await browser_agent.process_agent_command(text)
+        if confirmation:
+            keyboard = [
+                [InlineKeyboardButton("✅ 実行する", callback_data=f"ai_exec:yes")],
+                [InlineKeyboardButton("❌ キャンセル", callback_data=f"ai_exec:no")]
+            ]
+            context.user_data["ai_pending_action"] = action_json
+            await update.message.reply_text(confirmation, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text("⚠️ 意図をうまく解析できませんでした。")
+    except Exception as e:
+        await update.message.reply_text(f"❌ エラーが発生しました: {e}")
+        
+    return True
+
+async def ai_exec_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    if not data.startswith("ai_exec:"):
+        return
+        
+    action = data.split(":")[1]
+    if action == "no":
+        context.user_data.pop("ai_pending_action", None)
+        await query.edit_message_text("❌ 実行をキャンセルしました。")
+        return
+        
+    action_json = context.user_data.get("ai_pending_action")
+    if not action_json:
+        await query.edit_message_text("⚠️ 期限切れです。もう一度入力してください。")
+        return
+        
+    await query.edit_message_text("⏳ 実行中...")
+    import browser_agent
+    try:
+        result = await browser_agent.execute_confirmed(action_json)
+        await query.edit_message_text(result)
+    except Exception as e:
+        await query.edit_message_text(f"❌ 実行エラー: {e}")
 
 # ─── 経費入力ハンドラー ─────────────────────────────────────
 async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1820,6 +2188,12 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if handled:
             return
 
+    # AIシフト操作
+    if context.user_data.get("ai_shift_awaiting"):
+        handled = await handle_ai_shift_text(update, context)
+        if handled:
+            return
+
     # 仮想通貨取引入力待ちの場合（専用フローを優先）
     if context.user_data.get("crypto_awaiting_trade"):
         handled = await handle_crypto_trade_text(update, context)
@@ -1917,6 +2291,27 @@ def main() -> None:
         .build()
     )
 
+
+    # 出稼ぎスケジュール登録
+    guest_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(r"^💼 出稼ぎスケジュール登録$"), guest_start)],
+        states={
+            GUEST_NAME: [CallbackQueryHandler(guest_name_callback, pattern="^guest_name:")],
+            GUEST_START_DATE: [CallbackQueryHandler(guest_start_date_callback, pattern="^guest_start_date:")],
+            GUEST_END_DATE: [CallbackQueryHandler(guest_end_date_callback, pattern="^guest_end_date:")],
+            GUEST_START_TIME: [CallbackQueryHandler(guest_in_time_callback, pattern="^guest_in_time:")],
+            GUEST_END_TIME: [CallbackQueryHandler(guest_out_time_callback, pattern="^guest_out_time:")],
+            GUEST_EXPENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, guest_expense_text)],
+            GUEST_X_ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, guest_x_account_text)],
+        },
+        fallbacks=[MessageHandler(filters.Regex(r"^❌ キャンセル$"), guest_start)],  # ダミーフォールバック
+        per_message=False
+    )
+    app.add_handler(guest_conv)
+    
+    app.add_handler(MessageHandler(filters.Regex(r"^🗣️ AIでシフト操作$"), ai_shift_start))
+    app.add_handler(CallbackQueryHandler(ai_exec_callback, pattern="^ai_exec:"))
+    
     # ─── 経費入力 ConversationHandler ───────────────────
     expense_conv = ConversationHandler(
         entry_points=[
