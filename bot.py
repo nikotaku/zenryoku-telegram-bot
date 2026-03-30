@@ -129,10 +129,10 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
+        [KeyboardButton("💼 出稼ぎスケジュール登録")],
         [KeyboardButton("✍️ SEO記事作成")],
         [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
-        [KeyboardButton("💰 仮想通貨")],
-        [KeyboardButton("📅 シフトDB")],
+        [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
