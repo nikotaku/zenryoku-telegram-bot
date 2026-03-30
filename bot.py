@@ -10,7 +10,8 @@
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, time
+import pytz
 
 from telegram import (
     Update,
@@ -48,7 +49,8 @@ from seo_article import (
 
 import browser_agent
 import notion_shift_client
-from datetime import datetime
+from datetime import datetime, time
+import pytz
 from bitbank_client import (
     get_portfolio,
     format_portfolio_message,
@@ -817,7 +819,8 @@ async def handle_imasugu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text("⏳ 今日のシフトとXアカウント情報を取得中...")
     
     try:
-        from datetime import datetime
+        from datetime import datetime, time
+import pytz
         import notion_shift_client
         import requests
         import os
@@ -901,6 +904,36 @@ async def handle_imasugu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
     except Exception as e:
         await update.message.reply_text(f"❌ エラーが発生しました: {str(e)[:200]}")
+
+
+async def cmd_chatid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """現在のチャットIDを返す（グループ登録用）"""
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(f"このチャット（グループ）のIDは以下です：\n`{chat_id}`\nこれをシステムに登録してください。", parse_mode="Markdown")
+
+async def scheduled_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """定期実行される同期ジョブ"""
+    import os
+    import browser_agent
+    
+    chat_id = os.environ.get("LOG_GROUP_ID")
+    if not chat_id:
+        logger.error("LOG_GROUP_ID が設定されていないため、定期同期ログを送信できません。")
+        return
+        
+    try:
+        await context.bot.send_message(chat_id=chat_id, text="🔄 【定期実行】 1週間分のシフト自動同期を開始します...")
+        agent = browser_agent.BrowserAgent()
+        result = await agent._sync_all_week()
+        
+        # ログが長い場合、分割して送る（Telegramの制限対策）
+        if len(result) > 4000:
+            result = result[:4000] + "\n...（文字数制限のため省略）"
+            
+        await context.bot.send_message(chat_id=chat_id, text=result)
+    except Exception as e:
+        logger.error(f"定期同期エラー: {e}")
+        await context.bot.send_message(chat_id=chat_id, text=f"❌ 【定期実行エラー】\n{str(e)[:300]}")
 
 # ─── 経費入力ハンドラー ─────────────────────────────────────
 async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2405,6 +2438,16 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^🗣️ AIでシフト操作$"), ai_shift_start))
     app.add_handler(CallbackQueryHandler(ai_exec_callback, pattern="^ai_exec:"))
     
+
+    # コマンドの追加
+    app.add_handler(CommandHandler("chatid", cmd_chatid))
+
+    # 定期実行ジョブの追加 (朝8時、昼12時、夕方18時)
+    jst = pytz.timezone('Asia/Tokyo')
+    app.job_queue.run_daily(scheduled_sync, time(hour=8, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(scheduled_sync, time(hour=12, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(scheduled_sync, time(hour=18, minute=0, tzinfo=jst))
+
     # ─── 経費入力 ConversationHandler ───────────────────
     expense_conv = ConversationHandler(
         entry_points=[
