@@ -1933,7 +1933,7 @@ async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif action == "sync_caskan":
+    elif action == "sync_caskan_week":
         keyboard = [
             [
                 InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_caskan"),
@@ -1948,7 +1948,7 @@ async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif action == "sync_estama":
+    elif action == "sync_estama_week":
         keyboard = [
             [
                 InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_estama"),
@@ -1963,11 +1963,11 @@ async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif action == "diff":
+    elif action == "diff_week":
         await query.edit_message_text("⏳ NotionシフトDB・キャスカン・エスたまのシフトを比較中...")
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "diff_shifts", "params": {}}'
+                '{"action": "diff_shifts_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -2027,7 +2027,7 @@ async def handle_shift_db_confirm_callback(update: Update, context: ContextTypes
         )
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "sync_all", "params": {}}'
+                '{"action": "sync_all_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -2036,14 +2036,14 @@ async def handle_shift_db_confirm_callback(update: Update, context: ContextTypes
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
-    elif action == "sync_caskan":
+    elif action == "sync_caskan_week":
         await query.edit_message_text(
             "⏳ NotionシフトDB → キャスカンへ同期中...\n"
             "しばらくお待ちください。"
         )
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "sync_to_caskan", "params": {}}'
+                '{"action": "sync_to_caskan_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -2052,14 +2052,14 @@ async def handle_shift_db_confirm_callback(update: Update, context: ContextTypes
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
-    elif action == "sync_estama":
+    elif action == "sync_estama_week":
         await query.edit_message_text(
             "⏳ NotionシフトDB → エスたまへ同期中...\n"
             "しばらくお待ちください。"
         )
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "sync_to_estama", "params": {}}'
+                '{"action": "sync_to_estama_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -2075,14 +2075,14 @@ async def handle_agent_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """エージェントメニューを表示"""
     keyboard = [
         [
-            InlineKeyboardButton("🔄 今日のシフトを全同期", callback_data="agent:sync"),
+            InlineKeyboardButton("🔄 1週間分のシフトを全同期", callback_data="agent:sync_week"),
         ],
         [
-            InlineKeyboardButton("🟢 キャスカンに同期", callback_data="agent:sync_caskan"),
-            InlineKeyboardButton("🔵 エスたまに同期", callback_data="agent:sync_estama"),
+            InlineKeyboardButton("🟢 キャスカンに同期(1週間)", callback_data="agent:sync_caskan_week"),
+            InlineKeyboardButton("🔵 エスたまに同期(1週間)", callback_data="agent:sync_estama_week"),
         ],
         [
-            InlineKeyboardButton("📋 差異を確認する", callback_data="agent:diff"),
+            InlineKeyboardButton("📋 差異を確認する(1週間)", callback_data="agent:diff_week"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2108,7 +2108,7 @@ async def handle_agent_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     action = data.replace("agent:", "")
 
-    if action == "sync":
+    if action == "sync_week":
         keyboard = [
             [
                 InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync"),
@@ -2123,7 +2123,7 @@ async def handle_agent_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif action == "sync_caskan":
+    elif action == "sync_caskan_week":
         keyboard = [
             [
                 InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_caskan"),
@@ -2138,7 +2138,7 @@ async def handle_agent_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif action == "sync_estama":
+    elif action == "sync_estama_week":
         keyboard = [
             [
                 InlineKeyboardButton("✅ 実行する", callback_data="agent_confirm:sync_estama"),
@@ -2153,11 +2153,11 @@ async def handle_agent_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif action == "diff":
+    elif action == "diff_week":
         await query.edit_message_text("⏳ NotionシフトDB・キャスカン・エスたまのシフトを比較中...")
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "diff_shifts", "params": {}}'
+                '{"action": "diff_shifts_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -2181,14 +2181,14 @@ async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DE
         await query.edit_message_text("❌ 操作をキャンセルしました。")
         return
 
-    if action == "sync":
+    if action == "sync_week":
         await query.edit_message_text(
             "⏳ NotionシフトDB → キャスカン＆エスたまへ同期中...\n"
             "しばらくお待ちください。"
         )
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "sync_all", "params": {}}'
+                '{"action": "sync_all_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -2196,14 +2196,14 @@ async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DE
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
-    elif action == "sync_caskan":
+    elif action == "sync_caskan_week":
         await query.edit_message_text(
             "⏳ NotionシフトDB → キャスカンへ同期中...\n"
             "しばらくお待ちください。"
         )
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "sync_to_caskan", "params": {}}'
+                '{"action": "sync_to_caskan_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."
@@ -2211,14 +2211,14 @@ async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DE
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
-    elif action == "sync_estama":
+    elif action == "sync_estama_week":
         await query.edit_message_text(
             "⏳ NotionシフトDB → エスたまへ同期中...\n"
             "しばらくお待ちください。"
         )
         try:
             result = await browser_agent.execute_confirmed(
-                '{"action": "sync_to_estama", "params": {}}'
+                '{"action": "sync_to_estama_week", "params": {}}'
             )
             if len(result) > 4000:
                 result = result[:4000] + "\n..."

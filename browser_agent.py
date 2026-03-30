@@ -339,6 +339,15 @@ class BrowserAgent:
             elif action == "sync_all_week":
                 return await self._sync_all_week()
 
+            elif action == "sync_to_caskan_week":
+                return await self._sync_to_caskan_week()
+
+            elif action == "sync_to_estama_week":
+                return await self._sync_to_estama_week()
+
+            elif action == "diff_shifts_week":
+                return await self._diff_shifts_week()
+
             elif action == "diff_shifts":
                 return await self._diff_shifts(params)
 
@@ -812,6 +821,43 @@ class BrowserAgent:
             results.append(result)
             await asyncio.sleep(2)
 
+        return "\n\n".join(results)
+
+
+    async def _sync_to_caskan_week(self) -> str:
+        from datetime import datetime, timedelta
+        import asyncio
+        now = datetime.now()
+        results = []
+        for i in range(7):
+            date = (now + timedelta(days=i)).strftime("%Y-%m-%d")
+            result = await self._sync_to_caskan({"date": date})
+            results.append(result)
+            await asyncio.sleep(1)
+        return "\n\n".join(results)
+
+    async def _sync_to_estama_week(self) -> str:
+        from datetime import datetime, timedelta
+        import asyncio
+        now = datetime.now()
+        results = []
+        for i in range(7):
+            date = (now + timedelta(days=i)).strftime("%Y-%m-%d")
+            result = await self._sync_to_estama({"date": date})
+            results.append(result)
+            await asyncio.sleep(1)
+        return "\n\n".join(results)
+
+    async def _diff_shifts_week(self) -> str:
+        from datetime import datetime, timedelta
+        import asyncio
+        now = datetime.now()
+        results = []
+        for i in range(7):
+            date = (now + timedelta(days=i)).strftime("%Y-%m-%d")
+            result = await self._diff_shifts({"date": date})
+            results.append(result)
+            await asyncio.sleep(1)
         return "\n\n".join(results)
 
     async def _diff_shifts(self, params: dict) -> str:
