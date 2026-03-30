@@ -737,9 +737,10 @@ async def guest_x_account_text(update: Update, context: ContextTypes.DEFAULT_TYP
         
     # 最終出力を送信
     await update.message.reply_text(
-        "完成したフォーマットはこちらです👇 コピーして使ってください！\n\n" + result_text,
+        "完成したフォーマットはこちらです👇 コピーして使ってください！",
         reply_markup=MENU_KEYBOARD
     )
+    await update.message.reply_text(result_text)
     
     return ConversationHandler.END
 
