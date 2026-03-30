@@ -127,9 +127,9 @@ EXPENSE_DATE, EXPENSE_AMOUNT, EXPENSE_CONTENT, EXPENSE_MEMO = range(4)
 # ─── メニューキーボード ─────────────────────────────────
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
+        [KeyboardButton("🔔 イマスグ情報"), KeyboardButton("💼 出稼ぎスケジュール登録")],
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
-        [KeyboardButton("💼 出稼ぎスケジュール登録")],
         [KeyboardButton("✍️ SEO記事作成")],
         [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
         [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
@@ -810,6 +810,97 @@ async def ai_exec_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(result)
     except Exception as e:
         await query.edit_message_text(f"❌ 実行エラー: {e}")
+
+
+async def handle_imasugu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """イマスグ情報のツイート文面を生成する"""
+    await update.message.reply_text("⏳ 今日のシフトとXアカウント情報を取得中...")
+    
+    try:
+        from datetime import datetime
+        import notion_shift_client
+        import requests
+        import os
+        
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        shifts = notion_shift_client.query_shifts(date_str=today_str)
+        
+        if not shifts:
+            await update.message.reply_text("⚠️ 本日のシフトデータがありません。")
+            return
+            
+        # マスタDBから情報を取得
+        MASTER_DB_ID = os.environ.get("NOTION_MASTER_DB_ID", "")
+        NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
+        headers = {
+            "Authorization": f"Bearer {NOTION_API_KEY}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json"
+        }
+        
+        # 名前でソートして、時間を抽出
+        # 同じ子が複数入っている場合は1つにする（一番早い時間）
+        shift_dict = {}
+        for s in shifts:
+            name = s["name"]
+            start = s["start"]
+            if not start:
+                continue
+            if name not in shift_dict or start < shift_dict[name]:
+                shift_dict[name] = start
+                
+        # 時間順にソート
+        sorted_therapists = sorted(shift_dict.items(), key=lambda x: x[1])
+        
+        result_text = "🔔イマスグ情報🔔\n\n"
+        
+        for name, start_time in sorted_therapists:
+            # マスタDB検索
+            body = {
+                "filter": {
+                    "property": "名前",
+                    "title": {"contains": name}
+                }
+            }
+            resp = requests.post(f"https://api.notion.com/v1/databases/{MASTER_DB_ID}/query", headers=headers, json=body)
+            data = resp.json()
+            
+            x_url = ""
+            catchphrase = ""
+            
+            if data.get("results"):
+                props = data["results"][0]["properties"]
+                
+                # Xアカウント取得
+                x_prop = props.get("Xアカウント", {})
+                if x_prop.get("type") == "rich_text" and x_prop.get("rich_text"):
+                    x_url = x_prop["rich_text"][0].get("plain_text", "")
+                    # https://twitter.com/ や https://x.com/ が含まれているか確認
+                    if x_url and not x_url.startswith("http"):
+                        x_url = f"https://x.com/{x_url}"
+                
+                # キャッチフレーズ（「テキスト」または「お店コメント」または「テキスト 1」）
+                for field in ["テキスト", "お店コメント", "テキスト 1"]:
+                    cp_prop = props.get(field, {})
+                    if cp_prop.get("type") == "rich_text" and cp_prop.get("rich_text"):
+                        catchphrase = cp_prop["rich_text"][0].get("plain_text", "")
+                        break
+            
+            if catchphrase:
+                result_text += f"{catchphrase}\n"
+                
+            x_display = f"({x_url})" if x_url else ""
+            result_text += f"🌻{name}{x_display}\n"
+            result_text += f"🕐最短{start_time}〜\n\n"
+            
+        result_text += "お問い合わせお待ちしております✨"
+        
+        # メッセージを分けて送信（コピーしやすくするため）
+        await update.message.reply_text("✅ イマスグ情報を作成しました！👇 コピーして使ってください！")
+        await update.message.reply_text(result_text)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ エラーが発生しました: {str(e)[:200]}")
 
 # ─── 経費入力ハンドラー ─────────────────────────────────────
 async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2310,6 +2401,7 @@ def main() -> None:
     )
     app.add_handler(guest_conv)
     
+    app.add_handler(MessageHandler(filters.Regex(r"^🔔 イマスグ情報$"), handle_imasugu))
     app.add_handler(MessageHandler(filters.Regex(r"^🗣️ AIでシフト操作$"), ai_shift_start))
     app.add_handler(CallbackQueryHandler(ai_exec_callback, pattern="^ai_exec:"))
     
