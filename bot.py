@@ -746,6 +746,73 @@ async def guest_x_account_text(update: Update, context: ContextTypes.DEFAULT_TYP
     
     return ConversationHandler.END
 
+
+async def handle_group_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """投稿用グループからの画像＋テキストを受け取り、各媒体へ一斉送信する"""
+    import os
+    POST_GROUP_ID = os.environ.get("POST_GROUP_ID", "")
+    
+    # 投稿用グループ以外からのメッセージは無視
+    if not POST_GROUP_ID or str(update.effective_chat.id) != POST_GROUP_ID:
+        return
+        
+    # 画像がない場合は無視（今回は写メ日記を想定）
+    if not update.message.photo:
+        await update.message.reply_text("⚠️ 写真が添付されていません。写真と一緒に文章（キャプション）を送ってください。")
+        return
+        
+    caption = update.message.caption or ""
+    if not caption:
+        await update.message.reply_text("⚠️ 文章（キャプション）がありません。写真と一緒に文章を送ってください。\n\n【フォーマット例】\n#さくら\nタイトル：今日の出勤\n本文：こんにちは！...")
+        return
+        
+    # セラピスト名の抽出（#さくら のようにハッシュタグで指定）
+    import re
+    therapist_match = re.search(r'#([^\s
+]+)', caption)
+    if not therapist_match:
+        await update.message.reply_text("⚠️ 誰の投稿かわかりません。文章の中に「#源氏名」（例: #さくら）を入れてください。")
+        return
+        
+    therapist_name = therapist_match.group(1)
+    
+    # タイトルと本文の抽出（簡易的）
+    # 「タイトル：〇〇」があれば抽出、なければ最初の1行をタイトルにする
+    title_match = re.search(r'タイトル[：:]\s*([^
+]+)', caption)
+    if title_match:
+        title = title_match.group(1)
+        body = re.sub(r'タイトル[：:]\s*[^
+]+
+*', '', caption).replace(f"#{therapist_name}", "").strip()
+    else:
+        lines = caption.replace(f"#{therapist_name}", "").strip().split("\n")
+        title = lines[0] if lines else "写メ日記"
+        body = "\n".join(lines[1:]).strip() if len(lines) > 1 else title
+        
+    await update.message.reply_text(f"⏳ {therapist_name}の「{title}」を一斉送信中...")
+    
+    # 画像のダウンロード
+    from image_uploader import download_telegram_photo
+    photo = update.message.photo[-1]
+    image_bytes, _ = await download_telegram_photo(context.bot, photo.file_id)
+    
+    if not image_bytes:
+        await update.message.reply_text("❌ 画像の取得に失敗しました。")
+        return
+        
+    # TODO: エスたまとキャスカンのクライアントで実際の投稿処理を行う
+    import asyncio
+    await asyncio.sleep(2) # モック待機
+    
+    await update.message.reply_text(
+        f"✅ 【一斉送信 完了】\n\n"
+        f"👤 セラピスト: {therapist_name}\n"
+        f"🟢 エスたま: 送信成功 (準備中)\n"
+        f"🟢 キャスカン: 送信成功 (準備中)\n"
+        f"（※実際のWebサイトへの自動入力プログラムは現在開発中です）"
+    )
+
 # ─── AI自然言語シフト操作 ─────────────────────────────────────
 async def ai_shift_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -2441,6 +2508,10 @@ def main() -> None:
 
     # コマンドの追加
     app.add_handler(CommandHandler("chatid", cmd_chatid))
+
+    # 投稿用グループの画像＋テキストを一斉送信
+    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.GROUPS, handle_group_post))
+
 
     # 定期実行ジョブの追加 (朝8時、昼12時、夕方18時)
     jst = pytz.timezone('Asia/Tokyo')
