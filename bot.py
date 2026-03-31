@@ -77,6 +77,9 @@ logger = logging.getLogger(__name__)
 
 
 
+# ─── ブログ一斉投稿 ConversationHandler ステート ────────────────
+POST_NAME, POST_TEMPLATE, POST_TITLE, POST_BODY, POST_PHOTO = range(20, 25)
+
 # ─── 出稼ぎスケジュール登録 ConversationHandler ステート ────────────────
 GUEST_NAME, GUEST_START_DATE, GUEST_END_DATE, GUEST_START_TIME, GUEST_END_TIME, GUEST_EXPENSE, GUEST_X_ACCOUNT = range(10, 17)
 
@@ -129,6 +132,7 @@ EXPENSE_DATE, EXPENSE_AMOUNT, EXPENSE_CONTENT, EXPENSE_MEMO = range(4)
 # ─── メニューキーボード ─────────────────────────────────
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
+        [KeyboardButton("📲 ブログ一斉投稿")],
         [KeyboardButton("🔔 イマスグ情報"), KeyboardButton("💼 出稼ぎスケジュール登録")],
         [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
         [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
@@ -492,6 +496,154 @@ async def handle_diary_back_callback(update: Update, context: ContextTypes.DEFAU
 
 
 
+
+# ─── ブログ一斉投稿ハンドラー ─────────────────────────────────────
+async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    
+    therapists = get_therapist_list()
+    keyboard = []
+    row = []
+    for name in therapists:
+        row.append(InlineKeyboardButton(name, callback_data=f"post_name:{name}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="post_name:cancel")])
+    
+    await update.message.reply_text(
+        "📲 【ブログ一斉投稿】\n\n"
+        "各SNSやブログへ一斉に投稿します。\n"
+        "投稿するセラピストを選択してください：",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return POST_NAME
+
+async def post_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    if not query.data.startswith("post_name:"):
+        return POST_NAME
+        
+    name = query.data.replace("post_name:", "")
+    if name == "cancel":
+        await query.edit_message_text("❌ 一斉投稿をキャンセルしました。")
+        return ConversationHandler.END
+        
+    context.user_data["post_name"] = name
+    
+    # テンプレート選択
+    keyboard = []
+    for template in PHOTO_DIARY_TEMPLATES:
+        keyboard.append([InlineKeyboardButton(template["title"], callback_data=f"post_tmpl:{template['id']}")])
+    keyboard.append([InlineKeyboardButton("✏️ 手動で入力する", callback_data="post_tmpl:manual")])
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="post_tmpl:cancel")])
+    
+    await query.edit_message_text(
+        f"✅ 選択: {name}\n\n"
+        "次に、投稿する【文章の雛形（テンプレート）】を選択してください：",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return POST_TEMPLATE
+
+async def post_template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.replace("post_tmpl:", "")
+    if data == "cancel":
+        await query.edit_message_text("❌ 一斉投稿をキャンセルしました。")
+        return ConversationHandler.END
+        
+    if data == "manual":
+        context.user_data["post_is_manual"] = True
+        await query.edit_message_text("✏️ 手動入力を選択しました。\nまずは【タイトル】をチャットに入力してください：")
+        return POST_TITLE
+        
+    # テンプレート自動適用
+    template = next((t for t in PHOTO_DIARY_TEMPLATES if str(t["id"]) == data), None)
+    if not template:
+        await query.edit_message_text("⚠️ エラー: テンプレートが見つかりません。")
+        return ConversationHandler.END
+        
+    name = context.user_data["post_name"]
+    title = template["short"].replace("○○", name)
+    body = template["text"].replace("○○", name)
+    
+    # 140文字制限対応の短縮テキストも作成しておく（今回は全て共通設定だが将来のため）
+    # ※ユーザーの希望により共通文章を使用
+    context.user_data["post_title"] = title
+    context.user_data["post_body"] = body
+    
+    await query.edit_message_text(
+        f"✅ テンプレートを適用しました！\n\n"
+        f"【タイトル】\n{title}\n\n"
+        f"【本文】\n{body}\n\n"
+        "📸 最後に、投稿する【画像】を送信してください！"
+    )
+    return POST_PHOTO
+
+async def post_title_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if text == "キャンセル":
+        await update.message.reply_text("❌ 一斉投稿をキャンセルしました。", reply_markup=MENU_KEYBOARD)
+        return ConversationHandler.END
+        
+    context.user_data["post_title"] = text
+    await update.message.reply_text("✅ タイトルを設定しました。\n次に、【本文】（140文字以内）を入力してください：")
+    return POST_BODY
+
+async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if text == "キャンセル":
+        await update.message.reply_text("❌ 一斉投稿をキャンセルしました。", reply_markup=MENU_KEYBOARD)
+        return ConversationHandler.END
+        
+    context.user_data["post_body"] = text
+    
+    title = context.user_data["post_title"]
+    await update.message.reply_text(
+        f"✅ 本文を設定しました！\n\n"
+        f"【タイトル】\n{title}\n\n"
+        f"【本文】\n{text}\n\n"
+        "📸 最後に、投稿する【画像】を送信してください！"
+    )
+    return POST_PHOTO
+
+async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message.photo:
+        await update.message.reply_text("⚠️ 写真が添付されていません。写真を送信してください。")
+        return POST_PHOTO
+        
+    photo = update.message.photo[-1]
+    name = context.user_data["post_name"]
+    title = context.user_data["post_title"]
+    
+    await update.message.reply_text(f"⏳ {name}の「{title}」を一斉送信中...\nしばらくお待ちください。")
+    
+    # 画像のダウンロードとURL化
+    from image_uploader import upload_telegram_photo
+    image_url = await upload_telegram_photo(context.bot, photo.file_id, name)
+    
+    # TODO: 実際の各プラットフォームへの投稿プログラムを呼び出す
+    import asyncio
+    await asyncio.sleep(2)
+    
+    await update.message.reply_text(
+        f"✅ 【一斉送信 完了】\n\n"
+        f"👤 セラピスト: {name}\n"
+        f"🟢 エスたま: 送信成功 (準備中)\n"
+        f"🟢 キャスカン: 送信成功 (準備中)\n"
+        f"🟢 X(Twitter): 送信成功 (準備中)\n"
+        f"🟢 Bluesky: 送信成功 (準備中)\n\n"
+        f"（※実際のWebサイトへの自動入力プログラムは現在開発中です）",
+        reply_markup=MENU_KEYBOARD
+    )
+    return ConversationHandler.END
+
 # ─── 出稼ぎスケジュール登録ハンドラー ─────────────────────────────────────
 async def guest_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()  # リセット
@@ -747,73 +899,6 @@ async def guest_x_account_text(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 
-async def handle_group_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """投稿用グループからの画像＋テキストを受け取り、各媒体へ一斉送信する"""
-    import os
-    POST_GROUP_ID = os.environ.get("POST_GROUP_ID", "")
-    
-    # 投稿用グループ以外からのメッセージは無視
-    if not POST_GROUP_ID or str(update.effective_chat.id) != POST_GROUP_ID:
-        return
-        
-    # 画像がない場合は無視（今回は写メ日記を想定）
-    if not update.message.photo:
-        await update.message.reply_text("⚠️ 写真が添付されていません。写真と一緒に文章（キャプション）を送ってください。")
-        return
-        
-    caption = update.message.caption or ""
-    if not caption:
-        await update.message.reply_text("⚠️ 文章（キャプション）がありません。写真と一緒に文章を送ってください。\n\n【フォーマット例】\n#さくら\nタイトル：今日の出勤\n本文：こんにちは！...")
-        return
-        
-    # セラピスト名の抽出（#さくら のようにハッシュタグで指定）
-    import re
-    therapist_match = re.search(r'#([^\s
-]+)', caption)
-    if not therapist_match:
-        await update.message.reply_text("⚠️ 誰の投稿かわかりません。文章の中に「#源氏名」（例: #さくら）を入れてください。")
-        return
-        
-    therapist_name = therapist_match.group(1)
-    
-    # タイトルと本文の抽出（簡易的）
-    # 「タイトル：〇〇」があれば抽出、なければ最初の1行をタイトルにする
-    title_match = re.search(r'タイトル[：:]\s*([^
-]+)', caption)
-    if title_match:
-        title = title_match.group(1)
-        body = re.sub(r'タイトル[：:]\s*[^
-]+
-*', '', caption).replace(f"#{therapist_name}", "").strip()
-    else:
-        lines = caption.replace(f"#{therapist_name}", "").strip().split("\n")
-        title = lines[0] if lines else "写メ日記"
-        body = "\n".join(lines[1:]).strip() if len(lines) > 1 else title
-        
-    await update.message.reply_text(f"⏳ {therapist_name}の「{title}」を一斉送信中...")
-    
-    # 画像のダウンロード
-    from image_uploader import download_telegram_photo
-    photo = update.message.photo[-1]
-    image_bytes, _ = await download_telegram_photo(context.bot, photo.file_id)
-    
-    if not image_bytes:
-        await update.message.reply_text("❌ 画像の取得に失敗しました。")
-        return
-        
-    # TODO: エスたまとキャスカンのクライアントで実際の投稿処理を行う
-    import asyncio
-    await asyncio.sleep(2) # モック待機
-    
-    await update.message.reply_text(
-        f"✅ 【一斉送信 完了】\n\n"
-        f"👤 セラピスト: {therapist_name}\n"
-        f"🟢 エスたま: 送信成功 (準備中)\n"
-        f"🟢 キャスカン: 送信成功 (準備中)\n"
-        f"（※実際のWebサイトへの自動入力プログラムは現在開発中です）"
-    )
-
-# ─── AI自然言語シフト操作 ─────────────────────────────────────
 async def ai_shift_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "🗣️ 【AIでシフト操作】\n\n"
@@ -887,7 +972,7 @@ async def handle_imasugu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     try:
         from datetime import datetime, time
-import pytz
+        import pytz
         import notion_shift_client
         import requests
         import os
@@ -2484,6 +2569,22 @@ def main() -> None:
     )
 
 
+
+    # ブログ一斉投稿
+    post_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(r"^📲 ブログ一斉投稿$"), post_start)],
+        states={
+            POST_NAME: [CallbackQueryHandler(post_name_callback, pattern="^post_name:")],
+            POST_TEMPLATE: [CallbackQueryHandler(post_template_callback, pattern="^post_tmpl:")],
+            POST_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_title_text)],
+            POST_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_body_text)],
+            POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
+        },
+        fallbacks=[MessageHandler(filters.Regex(r"^❌ キャンセル$"), post_start)],
+        per_message=False
+    )
+    app.add_handler(post_conv)
+
     # 出稼ぎスケジュール登録
     guest_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(r"^💼 出稼ぎスケジュール登録$"), guest_start)],
@@ -2509,8 +2610,7 @@ def main() -> None:
     # コマンドの追加
     app.add_handler(CommandHandler("chatid", cmd_chatid))
 
-    # 投稿用グループの画像＋テキストを一斉送信
-    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.GROUPS, handle_group_post))
+
 
 
     # 定期実行ジョブの追加 (朝8時、昼12時、夕方18時)
