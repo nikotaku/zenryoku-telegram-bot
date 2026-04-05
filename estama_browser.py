@@ -498,3 +498,67 @@ class EstamaBrowser:
         except Exception as e:
             logger.error(f"スクリーンショットエラー: {e}")
             return ""
+
+    async def post_diary(self, therapist_name: str, title: str, body: str, image_bytes: bytes) -> dict:
+        """
+        エスたまに写メ日記（ブログ）を投稿する
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました"}
+            
+        try:
+            import tempfile
+            import os
+            
+            # 画像を一時ファイルに保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(image_bytes)
+                tmp_path = tmp.name
+                
+            page = self.page
+            await page.goto("https://estama.jp/admin/blog_edit/")
+            await page.wait_for_load_state("networkidle")
+            
+            # セラピストの選択（セレクトボックスまたはラジオボタンを想定）
+            # label要素やoptionテキストでマッチングを試みる
+            try:
+                # optionタグを探す
+                await page.locator(f"select option:has-text('{therapist_name}')").wait_for(timeout=2000)
+                # 親のselect要素を取得して値を選択
+                select_elem = page.locator(f"select:has(option:has-text('{therapist_name}'))").first
+                value = await page.locator(f"select option:has-text('{therapist_name}')").get_attribute("value")
+                await select_elem.select_option(value)
+            except Exception:
+                try:
+                    # ラジオボタンやラベルを想定
+                    await page.locator(f"text='{therapist_name}'").click(timeout=2000)
+                except Exception:
+                    pass # とりあえず進める
+                    
+            # タイトルと本文の入力
+            # 一般的なname属性やプレースホルダーで探す
+            await page.fill("input[name*='title'], input[placeholder*='タイトル']", title)
+            await page.fill("textarea[name*='body'], textarea[name*='content'], textarea[placeholder*='本文']", body)
+            
+            # 画像のアップロード
+            # fileタイプのinputを探す
+            file_input = page.locator("input[type='file']").first
+            await file_input.set_input_files(tmp_path)
+            
+            # 送信ボタンをクリック
+            submit_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('投稿'), button:has-text('保存')").first
+            await submit_btn.click()
+            
+            await page.wait_for_load_state("networkidle")
+            
+            os.unlink(tmp_path)
+            
+            # エラーメッセージがないか確認
+            if await page.locator("text='エラー'").count() > 0:
+                return {"success": False, "message": "投稿画面でエラーが発生しました"}
+                
+            return {"success": True, "message": "投稿完了"}
+            
+        except Exception as e:
+            self.logger.error(f"エスたま日記投稿エラー: {e}")
+            return {"success": False, "message": str(e)}

@@ -867,27 +867,48 @@ async def guest_x_account_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
 -------------------------"""
     
-    await update.message.reply_text("⏳ NotionのシフトDBに予定を登録中...")
+    await update.message.reply_text("⏳ キャスカンのシステムに予定を直接登録中...")
     
-    # Notionへ登録 (毎日のシフトを作成)
-    import notion_shift_client
+    # キャスカンへ登録
+    import browser_agent
     from datetime import timedelta
+    import asyncio
     
     success_count = 0
+    fail_details = []
     try:
+        agent = browser_agent.BrowserAgent()
+        caskan = await agent._get_caskan()
+        
         s_date = datetime.strptime(start_d, "%Y-%m-%d")
         e_date = datetime.strptime(end_d, "%Y-%m-%d")
         current = s_date
         while current <= e_date:
             curr_str = current.strftime("%Y-%m-%d")
-            res = notion_shift_client.create_shift(name, curr_str, in_time, out_time)
-            if res:
+            # キャスカンに登録
+            res = await caskan.register_shift(
+                cast_name=name,
+                date_str=curr_str,
+                start_time=in_time,
+                end_time=out_time
+            )
+            if res.get("success"):
                 success_count += 1
+            else:
+                fail_details.append(f"{curr_str}: {res.get('message', '不明なエラー')}")
+                
             current += timedelta(days=1)
+            await asyncio.sleep(1) # 連投防止
             
-        await update.message.reply_text(f"✅ NotionシフトDBに {success_count} 日分のシフト（{in_time}〜{out_time}）を登録しました！")
+        await agent.close()
+            
+        if fail_details:
+            fail_text = "\n".join(fail_details)
+            await update.message.reply_text(f"✅ キャスカンに {success_count} 日分のシフト（{in_time}〜{out_time}）を登録しました！\n\n⚠️ 一部失敗:\n{fail_text}")
+        else:
+            await update.message.reply_text(f"✅ キャスカンに {success_count} 日分のシフト（{in_time}〜{out_time}）を登録しました！")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Notion登録中にエラーが発生しました: {e}")
+        await update.message.reply_text(f"⚠️ キャスカン登録中にエラーが発生しました: {e}")
         
     # 最終出力を送信
     await update.message.reply_text(
@@ -957,9 +978,22 @@ async def ai_exec_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text("⚠️ 期限切れです。もう一度入力してください。")
         return
         
-    await query.edit_message_text("⏳ 実行中...")
+    await query.edit_message_text("⏳ キャスカンのシステムで実行中...")
     import browser_agent
     try:
+        import json
+        intent = json.loads(action_json)
+        # NLPがNotion向けに解析したアクションをキャスカン用にすり替える
+        if intent.get("action") == "notion_add_shift":
+            intent["action"] = "caskan_register_shift"
+            if "name" in intent.get("params", {}) and "cast_name" not in intent["params"]:
+                intent["params"]["cast_name"] = intent["params"]["name"]
+        elif intent.get("action") == "notion_delete_shift":
+            intent["action"] = "caskan_delete_shift"
+            if "name" in intent.get("params", {}) and "cast_name" not in intent["params"]:
+                intent["params"]["cast_name"] = intent["params"]["name"]
+                
+        action_json = json.dumps(intent, ensure_ascii=False)
         result = await browser_agent.execute_confirmed(action_json)
         await query.edit_message_text(result)
     except Exception as e:
