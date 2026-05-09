@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>全力エステ ご利用同意書</title>
+    <script src="https://cdn.jsdelivr.net/npm/signature_pad@4.1.5/dist/signature_pad.umd.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #d4af37; /* ゴールド */
+            --bg-color: #fcfcfc;
+            --text-color: #333;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        h1 {
+            font-size: 1.4rem;
+            text-align: center;
+            color: var(--primary-color);
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .agreement-text {
+            height: 300px;
+            overflow-y: scroll;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 4px;
+            background: #fafafa;
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+        }
+        .agreement-text h2 {
+            font-size: 1rem;
+            margin-top: 15px;
+            margin-bottom: 5px;
+        }
+        .agreement-text ul {
+            padding-left: 20px;
+            margin-top: 0;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        .signature-wrapper {
+            position: relative;
+            border: 2px dashed #aaa;
+            background: #fff;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 150px;
+            touch-action: none;
+        }
+        .clear-btn {
+            background: #eee;
+            border: 1px solid #ccc;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            float: right;
+            margin-bottom: 15px;
+        }
+        .submit-btn {
+            width: 100%;
+            background-color: var(--primary-color);
+            color: #fff;
+            border: none;
+            padding: 15px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+            margin-top: 20px;
+            clear: both;
+        }
+        .submit-btn:hover {
+            opacity: 0.9;
+        }
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            background: #fff8e1;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid var(--primary-color);
+        }
+        .checkbox-container input {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+        }
+        #result-message {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>全力エステ ご利用同意書</h1>
+        
+        <div class="agreement-text">
+            <p>当店（全力エステ）は、風俗営業等の規制及び業務の適正化等に関する法律における性風俗関連特殊営業ではございません。リラクゼーションを目的としたメンズエステサロンです。</p>
+            <p>以下の行為は一切固くお断りいたします。万が一発覚した場合は、即時サービスを中止しご退店いただきます（その際、料金の返金は一切いたしません）。また、悪質な場合は警察へ通報し、法的措置・損害賠償請求を行う場合がございます。</p>
+            
+            <h2>【禁止事項】</h2>
+            <ul>
+                <li>セラピストの身体（胸、お尻、局部など）に触れる行為、および密着を強要する行為</li>
+                <li>セラピストへの性的サービスの要求、またはそれに準ずる言動・行為（自慰行為を含む）</li>
+                <li>店外デート、個人的な連絡先（LINEやSNS等）の交換・詮索・引き抜き行為</li>
+                <li>盗撮・盗聴、および無断での録音・録画行為</li>
+                <li>セラピストに対する暴言、暴行、威圧的な態度など、心身に苦痛を与える行為</li>
+                <li>泥酔状態でのご利用、または違法薬物を使用している状態でのご利用</li>
+                <li>その他、当店が不適切と判断する行為や、他のお客様・近隣の迷惑となる行為</li>
+            </ul>
+
+            <h2>【キャンセルポリシー】</h2>
+            <ul>
+                <li>ご予約時間からの遅刻は、その分施術時間が短くなります。</li>
+                <li>無断キャンセル、または悪質な直前キャンセルの場合、今後のご利用をお断りし、キャンセル料（施術料金の100%）を請求させていただく場合がございます。</li>
+            </ul>
+
+            <p>※上記内容に違反し当店やセラピストに損害を与えた場合、違約金（金300,000円）をお支払いいただきます。</p>
+        </div>
+
+        <form id="agreement-form">
+            <label class="checkbox-container">
+                <input type="checkbox" id="agree-check" required>
+                <span>上記事項をすべて確認し、内容を遵守してサービスを利用することに同意します。</span>
+            </label>
+
+            <div class="form-group">
+                <label for="customer-name">お名前（フルネーム）</label>
+                <input type="text" id="customer-name" name="name" required placeholder="例：山田 太郎">
+            </div>
+            
+            <div class="form-group">
+                <label for="customer-phone">お電話番号</label>
+                <input type="text" id="customer-phone" name="phone" required placeholder="例：090-1234-5678">
+            </div>
+
+            <div class="form-group">
+                <label>ご署名（枠内に指でサインしてください）</label>
+                <div class="signature-wrapper">
+                    <canvas id="signature-pad"></canvas>
+                </div>
+                <button type="button" class="clear-btn" id="clear-btn">書き直す</button>
+            </div>
+
+            <button type="submit" class="submit-btn">同意して送信する</button>
+        </form>
+
+        <div id="result-message">
+            ご署名ありがとうございました。<br>確認が完了いたしました。
+        </div>
+    </div>
+
+    <script>
+        // Signature Pad initialization
+        const canvas = document.getElementById('signature-pad');
+        function resizeCanvas() {
+            const ratio =  Math.max(window.devicePixelRatio || 1, 1);
+            canvas.width = canvas.offsetWidth * ratio;
+            canvas.height = canvas.offsetHeight * ratio;
+            canvas.getContext("2d").scale(ratio, ratio);
+        }
+        window.onresize = resizeCanvas;
+        resizeCanvas();
+
+        const signaturePad = new SignaturePad(canvas, {
+            penColor: "rgb(0, 0, 0)",
+            backgroundColor: "rgb(255, 255, 255)"
+        });
+
+        document.getElementById('clear-btn').addEventListener('click', function () {
+            signaturePad.clear();
+        });
+
+        // Form submission
+        document.getElementById('agreement-form').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            
+            if (signaturePad.isEmpty()) {
+                alert("ご署名をお願いいたします。");
+                return;
+            }
+
+            const submitBtn = document.querySelector('.submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.innerText = "送信中...";
+
+            const payload = {
+                name: document.getElementById('customer-name').value,
+                phone: document.getElementById('customer-phone').value,
+                signature: signaturePad.toDataURL(), // Base64 image
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                // To the python server API
+                const response = await fetch('/api/agreement/customer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.ok) {
+                    document.getElementById('agreement-form').style.display = 'none';
+                    document.getElementById('result-message').style.display = 'block';
+                } else {
+                    alert("送信に失敗しました。もう一度お試しください。");
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "同意して送信する";
+                }
+            } catch (error) {
+                alert("通信エラーが発生しました。");
+                submitBtn.disabled = false;
+                submitBtn.innerText = "同意して送信する";
+            }
+        });
+    </script>
+</body>
+</html>

@@ -75,7 +75,7 @@ class CaskanBrowser:
             page = self._page
 
             # Step 1: ログインページへ移動
-            await page.goto(f"{BASE_URL}/login", wait_until="networkidle", timeout=30000)
+            await page.goto(f"{BASE_URL}/login", wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(1000)
 
             # 店舗IDを入力
@@ -235,6 +235,30 @@ class CaskanBrowser:
         except Exception as e:
             logger.error(f"シフト取得エラー: {e}")
             return {"error": str(e)}
+
+
+    async def post_news(self, title: str, body: str) -> dict:
+        """お知らせ（ニュース）を投稿する"""
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました"}
+        try:
+            page = self._page
+            await page.goto(f"{BASE_URL}/article/edit", wait_until="networkidle", timeout=30000)
+            
+            await page.fill('input[name="Article[title]"]', title)
+            await page.fill('textarea[name="Article[body]"]', body)
+            
+            # 保存ボタンをクリック
+            await asyncio.gather(
+                page.click('button[type="submit"].btn-success'),
+                page.wait_for_load_state("networkidle")
+            )
+            
+            logger.info("Caskan News Post successful")
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"Caskan News Post Error: {e}")
+            return {"success": False, "message": str(e)}
 
     async def get_cast_list(self) -> list:
         """キャスト一覧を取得する"""

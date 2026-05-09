@@ -1,3 +1,6 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
 #!/usr/bin/env python3
 """
 全力エステ Telegram Bot (@zenryoku_bot)
@@ -2577,6 +2580,28 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ─── メイン ─────────────────────────────────────────────
+
+async def handle_auto_post_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    if data.startswith("approve_"):
+        post_id = data.replace("approve_", "")
+        try:
+            await query.edit_message_caption(caption="✅ 投稿を承認しました！（HP・ゼロツー等への投稿をバックグラウンドで実行中です）")
+        except:
+            await query.edit_message_text(text="✅ 投稿を承認しました！（HP・ゼロツー等への投稿をバックグラウンドで実行中です）")
+            
+        import subprocess
+        subprocess.Popen(["/root/.openclaw/workspace/zenryoku-telegram-bot/venv/bin/python", "/root/.openclaw/workspace/zenryoku-telegram-bot/execute_post.py", post_id])
+        
+    elif data.startswith("reject_"):
+        try:
+            await query.edit_message_caption(caption="❌ 自動投稿をキャンセルしました。")
+        except:
+            await query.edit_message_text(text="❌ 自動投稿をキャンセルしました。")
+
 def main() -> None:
     """ボットを起動する"""
     request = HTTPXRequest(
@@ -2686,6 +2711,7 @@ def main() -> None:
     app.add_handler(expense_conv)
 
     # コマンド
+    app.add_handler(CallbackQueryHandler(handle_auto_post_approval, pattern=r"^(approve_|reject_)"))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("news", handle_news))
     app.add_handler(CommandHandler("images", handle_images))
@@ -2746,19 +2772,49 @@ def main() -> None:
 
 
 import os
+import json
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import logging
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-class DummyHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Bot is running!")
+class WebAppHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory="/root/.openclaw/workspace/zenryoku-telegram-bot/public", **kwargs)
+
+    def do_POST(self):
+        if self.path == "/api/agreement/customer":
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                # 保存処理
+                os.makedirs("/root/.openclaw/workspace/zenryoku-telegram-bot/agreements_data", exist_ok=True)
+                filename = f"/root/.openclaw/workspace/zenryoku-telegram-bot/agreements_data/{data['name']}_{data['phone']}.json"
+                with open(filename, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False)
+                
+                # Bot管理者へ通知
+                import requests
+                token = os.environ.get("TELEGRAM_BOT_TOKEN")
+                chat_id = "8419641279"
+                msg = f"📝 【誓約書 受信】\n\nお客様から同意書が送信されました！\n名前: {data['name']}\n電話: {data['phone']}"
+                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": msg})
+                
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"success": true}')
+            except Exception as e:
+                logging.error(f"Agreement Error: {e}")
+                self.send_response(500)
+                self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
 
 def keep_alive():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server = HTTPServer(("0.0.0.0", port), WebAppHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
 if __name__ == "__main__":
