@@ -2487,17 +2487,18 @@ async def handle_agent_nlp_confirm_callback(update: Update, context: ContextType
 
 
 # ─── 掲載ページ確認 ──────────────────────────────────────────────────────
-# 各媒体のお店掲載ページURL（変更する場合はここを編集してください）
 MEDIA_LISTING_PAGES = [
-    {"name": "エスたま", "emoji": "🔵", "url": "https://estama.jp/TODO_STORE_PAGE_URL"},
-    {"name": "キャスカン", "emoji": "🟢", "url": "https://TODO_CASKAN_STORE_PAGE_URL"},
-    {"name": "ZeroTwo", "emoji": "🟡", "url": "https://TODO_ZEROTWO_STORE_PAGE_URL"},
+    {"name": "公式HP", "url": "https://zenryoku-esthe.com"},
+    {"name": "エステ魂", "url": "https://estama.jp/shop/43923/"},
+    {"name": "メンズエステランキング", "url": "https://www.esthe-ranking.jp/sendai/shop-detail/3aec7842-f7f3-41e4-8cee-6bc4fda7b273/"},
+    {"name": "リットリンク", "url": "https://lit.link/zenryoku_esthe"},
+    {"name": "ブルースカイ", "url": "https://bsky.app/profile/zenryoku-esthe.bsky.social"},
 ]
 
 async def handle_media_pages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """掲載ページ確認 — 各媒体のお店ページリンクを表示"""
     keyboard = [
-        [InlineKeyboardButton(f"{p['emoji']} {p['name']}", url=p["url"])]
+        [InlineKeyboardButton(p["name"], url=p["url"])]
         for p in MEDIA_LISTING_PAGES
     ]
     await update.message.reply_text(
@@ -2509,25 +2510,41 @@ async def handle_media_pages(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ─── 各種管理画面 ─────────────────────────────────────────────────────────
-# 各種管理画面URL（変更する場合はここを編集してください）
 ADMIN_DASHBOARDS = [
-    {"name": "エスたま 管理画面", "emoji": "🔵", "url": "https://estama.jp/login"},
-    {"name": "キャスカン 管理画面", "emoji": "🟢", "url": "https://TODO_CASKAN_ADMIN_URL"},
-    {"name": "ZeroTwo 管理画面", "emoji": "🟡", "url": "https://TODO_ZEROTWO_ADMIN_URL"},
-    {"name": "X (Twitter)", "emoji": "🐦", "url": "https://x.com/home"},
-    {"name": "Notion", "emoji": "📓", "url": "https://www.notion.so"},
-    {"name": "Googleスプレッドシート", "emoji": "📊", "url": "https://docs.google.com/spreadsheets"},
+    # SNS / LINE
+    {"name": "🟢 LINE公式（求人）", "url": "https://lin.ee/mcg18I6"},
+    {"name": "🟢 LINE公式（集客）", "url": "https://lin.ee/oycKbIb"},
+    {"name": "🟢 X（集客）@zr_sendai", "url": "https://x.com/zr_sendai"},
+    {"name": "🟢 X（求人）@zenryoku_kyujin", "url": "https://x.com/zenryoku_kyujin"},
+    # システム
+    {"name": "💻 スクエア", "url": "https://www.notion.so/204f9507f0cf8166a890f670e5a59b2c"},
+    {"name": "💻 エスたま 管理画面", "url": "https://estama.jp/login"},
+    {"name": "🔗 予約フォーム（キャスカン）", "url": "https://r.caskan.jp/zenryoku1209"},
+    {"name": "🔗 エステカード決済", "url": "https://pay2.star-pay.jp/site/pc/shop.php?payc=A4046"},
+    # 業務フォーム
+    {"name": "🔗 経費精算フォーム", "url": "https://docs.google.com/forms/d/e/1FAIpQLSdH4CHHVfAQgZeu068hdqBIoioo2kCZ7E-v7vjLyFsASfT1kQ/viewform"},
+    {"name": "🔗 経費申請フォーム", "url": "https://docs.google.com/forms/d/e/1FAIpQLSfM__EXi1kt1wyXsMQDqKu9dXFZAI8-OQnuk2smxpKBta1Kzg/viewform"},
+    {"name": "🔗 振込依頼フォーム", "url": "https://yoom.fun/5eee42a7-b4ff-49a8-8373-606c66495142/forms/shared/Cu2K735X9qaSAdMs45x6Bw"},
+    {"name": "🔗 清掃チェックフォーム", "url": "https://forms.gle/6xfsmQMU6wmurJ1b8"},
+    {"name": "🔗 レジスタシート作成フォーム", "url": "https://yoom.fun/5eee42a7-b4ff-49a8-8373-606c66495142/forms/shared/xzvuqgIiE6P-t3eWamtU1w"},
+    {"name": "🔗 レジスタシート（Notion）", "url": "https://www.notion.so/257f9507f0cf80e7907ac0c919c44f56"},
+    {"name": "🔗 画像アップロードフォーム", "url": "https://docs.google.com/forms/d/e/1FAIpQLSf48nywPeNr1aZ1QTHXeQsl28u3WkF62-zN82ZGYozURaK8xA/viewform"},
+    {"name": "🔗 面談予約フォーム", "url": "https://yoom.fun/5eee42a7-b4ff-49a8-8373-606c66495142/forms/shared/2TPmMhYWn46vv-1EBVlnhw"},
+    # ルーム
+    {"name": "🎥 インルーム 金庫投函", "url": "https://d.kuku.lu/h3rc635z5"},
+    {"name": "🎥 ラズルーム 金庫投函", "url": "https://d.kuku.lu/ar2gtn44r"},
+    {"name": "🔗 ラズルーム 光熱費申請", "url": "https://x.gd/56ECe"},
 ]
 
 async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """各種管理画面 — 管理画面リンク一覧を表示"""
     keyboard = [
-        [InlineKeyboardButton(f"{d['emoji']} {d['name']}", url=d["url"])]
+        [InlineKeyboardButton(d["name"], url=d["url"])]
         for d in ADMIN_DASHBOARDS
     ]
     await update.message.reply_text(
         "⚙️ 【各種管理画面】\n\n"
-        "各種SNS・媒体の管理画面です。\n"
+        "各種SNS・媒体・業務フォームへのリンクです。\n"
         "タップして開いてください。",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
