@@ -142,6 +142,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("✍️ SEO記事作成")],
         [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
         [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
+        [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -2485,6 +2486,53 @@ async def handle_agent_nlp_confirm_callback(update: Update, context: ContextType
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
 
+# ─── 掲載ページ確認 ──────────────────────────────────────────────────────
+# 各媒体のお店掲載ページURL（変更する場合はここを編集してください）
+MEDIA_LISTING_PAGES = [
+    {"name": "エスたま", "emoji": "🔵", "url": "https://estama.jp/TODO_STORE_PAGE_URL"},
+    {"name": "キャスカン", "emoji": "🟢", "url": "https://TODO_CASKAN_STORE_PAGE_URL"},
+    {"name": "ZeroTwo", "emoji": "🟡", "url": "https://TODO_ZEROTWO_STORE_PAGE_URL"},
+]
+
+async def handle_media_pages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """掲載ページ確認 — 各媒体のお店ページリンクを表示"""
+    keyboard = [
+        [InlineKeyboardButton(f"{p['emoji']} {p['name']}", url=p["url"])]
+        for p in MEDIA_LISTING_PAGES
+    ]
+    await update.message.reply_text(
+        "🔗 【掲載ページ確認】\n\n"
+        "各媒体のお店掲載ページです。\n"
+        "タップして確認してください。",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+# ─── 各種管理画面 ─────────────────────────────────────────────────────────
+# 各種管理画面URL（変更する場合はここを編集してください）
+ADMIN_DASHBOARDS = [
+    {"name": "エスたま 管理画面", "emoji": "🔵", "url": "https://estama.jp/login"},
+    {"name": "キャスカン 管理画面", "emoji": "🟢", "url": "https://TODO_CASKAN_ADMIN_URL"},
+    {"name": "ZeroTwo 管理画面", "emoji": "🟡", "url": "https://TODO_ZEROTWO_ADMIN_URL"},
+    {"name": "X (Twitter)", "emoji": "🐦", "url": "https://x.com/home"},
+    {"name": "Notion", "emoji": "📓", "url": "https://www.notion.so"},
+    {"name": "Googleスプレッドシート", "emoji": "📊", "url": "https://docs.google.com/spreadsheets"},
+]
+
+async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """各種管理画面 — 管理画面リンク一覧を表示"""
+    keyboard = [
+        [InlineKeyboardButton(f"{d['emoji']} {d['name']}", url=d["url"])]
+        for d in ADMIN_DASHBOARDS
+    ]
+    await update.message.reply_text(
+        "⚙️ 【各種管理画面】\n\n"
+        "各種SNS・媒体の管理画面です。\n"
+        "タップして開いてください。",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ — Gemini LLMで解析して適切な操作を実行"""
@@ -2727,6 +2775,8 @@ def main() -> None:
     app.add_handler(CommandHandler("agent", handle_agent_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
     app.add_handler(CommandHandler("shiftdb", handle_shift_db_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^🔗 掲載ページ確認$"), handle_media_pages))
+    app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
