@@ -142,6 +142,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("✍️ SEO記事作成")],
         [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
         [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
+        [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -2485,6 +2486,70 @@ async def handle_agent_nlp_confirm_callback(update: Update, context: ContextType
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
 
+# ─── 掲載ページ確認 ──────────────────────────────────────────────────────
+MEDIA_LISTING_PAGES = [
+    {"name": "公式HP", "url": "https://zenryoku-esthe.com"},
+    {"name": "エステ魂", "url": "https://estama.jp/shop/43923/"},
+    {"name": "メンズエステランキング", "url": "https://www.esthe-ranking.jp/sendai/shop-detail/3aec7842-f7f3-41e4-8cee-6bc4fda7b273/"},
+    {"name": "リットリンク", "url": "https://lit.link/zenryoku_esthe"},
+    {"name": "ブルースカイ", "url": "https://bsky.app/profile/zenryoku-esthe.bsky.social"},
+]
+
+async def handle_media_pages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """掲載ページ確認 — 各媒体のお店ページリンクを表示"""
+    keyboard = [
+        [InlineKeyboardButton(p["name"], url=p["url"])]
+        for p in MEDIA_LISTING_PAGES
+    ]
+    await update.message.reply_text(
+        "🔗 【掲載ページ確認】\n\n"
+        "各媒体のお店掲載ページです。\n"
+        "タップして確認してください。",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+# ─── 各種管理画面 ─────────────────────────────────────────────────────────
+ADMIN_DASHBOARDS = [
+    # SNS / LINE
+    {"name": "🟢 LINE公式（求人）", "url": "https://lin.ee/mcg18I6"},
+    {"name": "🟢 LINE公式（集客）", "url": "https://lin.ee/oycKbIb"},
+    {"name": "🟢 X（集客）@zr_sendai", "url": "https://x.com/zr_sendai"},
+    {"name": "🟢 X（求人）@zenryoku_kyujin", "url": "https://x.com/zenryoku_kyujin"},
+    # システム
+    {"name": "💻 スクエア", "url": "https://www.notion.so/204f9507f0cf8166a890f670e5a59b2c"},
+    {"name": "💻 エスたま 管理画面", "url": "https://estama.jp/login"},
+    {"name": "🔗 予約フォーム（キャスカン）", "url": "https://r.caskan.jp/zenryoku1209"},
+    {"name": "🔗 エステカード決済", "url": "https://pay2.star-pay.jp/site/pc/shop.php?payc=A4046"},
+    # 業務フォーム
+    {"name": "🔗 経費精算フォーム", "url": "https://docs.google.com/forms/d/e/1FAIpQLSdH4CHHVfAQgZeu068hdqBIoioo2kCZ7E-v7vjLyFsASfT1kQ/viewform"},
+    {"name": "🔗 経費申請フォーム", "url": "https://docs.google.com/forms/d/e/1FAIpQLSfM__EXi1kt1wyXsMQDqKu9dXFZAI8-OQnuk2smxpKBta1Kzg/viewform"},
+    {"name": "🔗 振込依頼フォーム", "url": "https://yoom.fun/5eee42a7-b4ff-49a8-8373-606c66495142/forms/shared/Cu2K735X9qaSAdMs45x6Bw"},
+    {"name": "🔗 清掃チェックフォーム", "url": "https://forms.gle/6xfsmQMU6wmurJ1b8"},
+    {"name": "🔗 レジスタシート作成フォーム", "url": "https://yoom.fun/5eee42a7-b4ff-49a8-8373-606c66495142/forms/shared/xzvuqgIiE6P-t3eWamtU1w"},
+    {"name": "🔗 レジスタシート（Notion）", "url": "https://www.notion.so/257f9507f0cf80e7907ac0c919c44f56"},
+    {"name": "🔗 画像アップロードフォーム", "url": "https://docs.google.com/forms/d/e/1FAIpQLSf48nywPeNr1aZ1QTHXeQsl28u3WkF62-zN82ZGYozURaK8xA/viewform"},
+    {"name": "🔗 面談予約フォーム", "url": "https://yoom.fun/5eee42a7-b4ff-49a8-8373-606c66495142/forms/shared/2TPmMhYWn46vv-1EBVlnhw"},
+    # ルーム
+    {"name": "🎥 インルーム 金庫投函", "url": "https://d.kuku.lu/h3rc635z5"},
+    {"name": "🎥 ラズルーム 金庫投函", "url": "https://d.kuku.lu/ar2gtn44r"},
+    {"name": "🔗 ラズルーム 光熱費申請", "url": "https://x.gd/56ECe"},
+]
+
+async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """各種管理画面 — 管理画面リンク一覧を表示"""
+    keyboard = [
+        [InlineKeyboardButton(d["name"], url=d["url"])]
+        for d in ADMIN_DASHBOARDS
+    ]
+    await update.message.reply_text(
+        "⚙️ 【各種管理画面】\n\n"
+        "各種SNS・媒体・業務フォームへのリンクです。\n"
+        "タップして開いてください。",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ — Gemini LLMで解析して適切な操作を実行"""
@@ -2727,6 +2792,8 @@ def main() -> None:
     app.add_handler(CommandHandler("agent", handle_agent_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
     app.add_handler(CommandHandler("shiftdb", handle_shift_db_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^🔗 掲載ページ確認$"), handle_media_pages))
+    app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
