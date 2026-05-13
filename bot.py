@@ -137,12 +137,10 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📲 ブログ一斉投稿")],
         [KeyboardButton("🔔 イマスグ情報"), KeyboardButton("💼 出稼ぎスケジュール登録")],
-        [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
-        [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
-        [KeyboardButton("✍️ SEO記事作成")],
-        [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
-        [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
-        [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
+        [KeyboardButton("📸 画像管理"), KeyboardButton("📓 写メ日記")],
+        [KeyboardButton("💴 経費を入力")],
+        [KeyboardButton("🔑 APIキー更新"), KeyboardButton("🔗 掲載ページ確認")],
+        [KeyboardButton("⚙️ 各種管理画面")]
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -157,6 +155,19 @@ MENU_INLINE_KEYBOARD = InlineKeyboardMarkup([
 ])
 
 # ─── /start コマンド ───────────────────────────────────────────
+
+async def handle_api_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = (
+        "【APIキー更新手順】\n\n"
+        "1. Termiusを開き、サーバー(162.43.7.223)に接続\n"
+        "2. 黒い画面の末尾に以下を貼り付けてEnter\n\n"
+        "`update_api 新しいAPIキー`\n\n"
+        "※例: `update_api AIzaSyAum9UY0Y1na...`\n\n"
+        "実行後、数秒でBotが再起動して復旧します。"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start — メインメニューを表示"""
     await update.message.reply_text(
@@ -238,12 +249,13 @@ async def handle_news_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ─── /images コマンド（写真管理） ────────────────────────
 async def handle_images(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/images コマンド — 写真管理メニュー"""
+    keyboard = [
+        [InlineKeyboardButton("⬆️ 画像アップロード", callback_data="img_up")],
+        [InlineKeyboardButton("⬇️ 画像ダウンロード", callback_data="img_dl")]
+    ]
     await update.message.reply_text(
-        "📸 【画像管理】\n\n"
-        "セラピストのプロフィール写真をNotionに保存します。\n\n"
-        "📷 画像を送信してください。\n"
-        "送信後、保存先のセラピストを選択できます。",
-        reply_markup=MENU_KEYBOARD,
+        "📸 【画像管理】\n\n操作を選択してください。\n※アップロードする場合は、このまま画像を送信するだけでも可能です。",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -260,11 +272,21 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     context.user_data["pending_photo_file_id"] = file_id
 
     # セラピスト選択ボタンを生成
-    therapists = get_therapist_list()
+    from image_uploader import FOLDER_MAP
+    folder_names = list(FOLDER_MAP.keys())
+    
+    non_therapists = ['衛生・清掃管理', '室内設備・備品', '店舗情報・メニュー', 'その他・宣伝素材', '店舗別バナー、ロゴ', '共通バナー', '店舗用❶', '聡電舎❷']
+    therapists = sorted([n for n in folder_names if n not in non_therapists and n and "dummy" not in n.lower() and "セラピスト" not in n])
+    others = sorted([n for n in folder_names if n in non_therapists])
+    
+    # 選択肢が多いので、一旦カテゴリを選ばせるか、直接全部出すか
+    # ここではセラピストだけ出す（その他フォルダ用には別のUIが必要かもしれないが一旦すべて出す）
+    all_targets = therapists + others
+    
     keyboard = []
     row = []
-    for name in therapists:
-        row.append(InlineKeyboardButton(name, callback_data=f"photo_save:{name}"))
+    for name in all_targets:
+        row.append(InlineKeyboardButton(name[:15], callback_data=f"photo_save:{name}"))
         if len(row) == 3:
             keyboard.append(row)
             row = []
@@ -282,6 +304,116 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         reply_markup=reply_markup,
     )
 
+
+
+async def handle_img_up_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("📷 アップロードしたい画像を送信してください。送信後、保存先のセラピストを選択できます。")
+
+async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    # Get folder names from Drive mapping
+    from image_uploader import FOLDER_MAP
+    folder_names = list(FOLDER_MAP.keys())
+    
+    # Categorize into "Therapists" and "Others"
+    non_therapists = ['衛生・清掃管理', '室内設備・備品', '店舗情報・メニュー', 'その他・宣伝素材', '店舗別バナー、ロゴ', '共通バナー', '店舗用❶', '聡電舎❷']
+    therapists = [n for n in folder_names if n not in non_therapists and n and "dummy" not in n.lower() and "セラピスト" not in n]
+    others = [n for n in folder_names if n in non_therapists]
+    
+    # Let user choose category first to avoid huge keyboards
+    keyboard = [
+        [InlineKeyboardButton("👧 セラピスト一覧", callback_data="dl_cat:therapists")],
+        [InlineKeyboardButton("📁 その他フォルダ", callback_data="dl_cat:others")],
+        [InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")]
+    ]
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
+    
+    await query.edit_message_text(
+        "⬇️ 【画像ダウンロード】\n画像を取得したいセラピストを選択してください。（最新5枚）",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def handle_dl_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.replace("dl_cat:", "")
+    from image_uploader import FOLDER_MAP
+    folder_names = list(FOLDER_MAP.keys())
+    non_therapists = ['衛生・清掃管理', '室内設備・備品', '店舗情報・メニュー', 'その他・宣伝素材', '店舗別バナー、ロゴ', '共通バナー', '店舗用❶', '聡電舎❷']
+    
+    if data == "therapists":
+        items = sorted([n for n in folder_names if n not in non_therapists and n and "dummy" not in n.lower() and "セラピスト" not in n])
+        title = "👧 セラピスト一覧"
+    else:
+        items = sorted([n for n in folder_names if n in non_therapists])
+        title = "📁 その他フォルダ"
+        
+    keyboard = []
+    row = []
+    for name in items:
+        # shorten name if needed but usually okay
+        row.append(InlineKeyboardButton(name[:15], callback_data=f"dl_therapist:{name}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("🔙 戻る", callback_data="img_dl")])
+    
+    await query.edit_message_text(
+        f"{title}\n画像を取得したい対象を選択してください。（最新5枚）",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.replace("dl_therapist:", "")
+    if data == "cancel":
+        await query.edit_message_text("❌ ダウンロードをキャンセルしました。")
+        return
+        
+    await query.edit_message_text(f"⏳ {data}の最新画像(最大5枚)をGoogle Driveから取得中...")
+    
+    from image_uploader import get_latest_images_from_drive
+    images = get_latest_images_from_drive(data, limit=5)
+    
+    if not images:
+        await query.message.reply_text(f"❌ {data}の画像が見つかりませんでした。")
+        return
+        
+    from telegram import InputMediaPhoto
+    media_group = []
+    for img in images:
+        media_group.append(InputMediaPhoto(media=img["bytes"], caption=img["name"]))
+        
+    try:
+        from telegram import InputMediaPhoto
+        media_group = []
+        for img in images:
+            media_group.append(InputMediaPhoto(media=img["bytes"], caption=img["name"]))
+            
+        await context.bot.send_media_group(chat_id=query.message.chat_id, media=media_group)
+        await query.message.reply_text(f"✅ {data}の画像を取得しました。")
+    except Exception as e:
+        logger.error(f"Media send error: {e}")
+        # フォールバック: 1枚ずつ送信を試みる
+        try:
+            for img in images:
+                await context.bot.send_photo(chat_id=query.message.chat_id, photo=img["bytes"], caption=img["name"])
+            await query.message.reply_text(f"✅ {data}の画像を取得しました。(分割送信)")
+        except Exception as e2:
+            logger.error(f"Fallback send error: {e2}")
+            await query.message.reply_text("❌ 画像の送信に完全に失敗しました。ファイルサイズや形式がTelegramの制限に引っかかっています。")
 
 async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """セラピスト選択コールバック — 画像をNotionに保存"""
@@ -304,12 +436,7 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text("⚠️ 保存する画像が見つかりません。もう一度画像を送信してください。")
         return
 
-    page_id = get_therapist_page_id(therapist_name)
-    if not page_id:
-        await query.edit_message_text(f"⚠️ セラピスト「{therapist_name}」のNotionページが見つかりません。")
-        return
-
-    await query.edit_message_text(f"⏳ {therapist_name}のNotionページに画像を保存中...")
+    await query.edit_message_text(f"⏳ {therapist_name}のGoogle Driveに画像を保存中...")
 
     # 画像をアップロードしてURLを取得
     bot = context.bot
@@ -319,21 +446,12 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text("❌ 画像のアップロードに失敗しました。")
         return
 
-    # Notionページに画像を追加
-    caption = f"プロフィール写真 ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
-    success = append_image_to_page(page_id, image_url, caption)
+    context.user_data.pop("pending_photo_file_id", None)
 
-    if success:
-        context.user_data.pop("pending_photo_file_id", None)
-        await query.edit_message_text(
-            f"✅ {therapist_name}のNotionページに画像を保存しました！\n\n"
-            f"📎 Notion: https://www.notion.so/{page_id.replace('-', '')}"
-        )
-    else:
-        await query.edit_message_text(
-            f"❌ Notionへの保存に失敗しました。\n"
-            f"NOTION_API_KEY が正しく設定されているか確認してください。"
-        )
+    await query.edit_message_text(
+        f"✅ {therapist_name}の画像をGoogle Driveに保存しました！\n\n"
+        f"📎 URL: {image_url}"
+    )
 
 
 # ─── 写メ日記テンプレート ────────────────────────────────
@@ -2727,7 +2845,6 @@ def main() -> None:
     app.add_handler(guest_conv)
     
     app.add_handler(MessageHandler(filters.Regex(r"^🔔 イマスグ情報$"), handle_imasugu))
-    app.add_handler(MessageHandler(filters.Regex(r"^🗣️ AIでシフト操作$"), ai_shift_start))
     app.add_handler(CallbackQueryHandler(ai_exec_callback, pattern="^ai_exec:"))
     
 
@@ -2778,20 +2895,14 @@ def main() -> None:
     # コマンド
     app.add_handler(CallbackQueryHandler(handle_auto_post_approval, pattern=r"^(approve_|reject_)"))
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("news", handle_news))
+    app.add_handler(MessageHandler(filters.Regex(r"^🔑 APIキー更新$"), handle_api_update))
     app.add_handler(CommandHandler("images", handle_images))
 
     # メニューボタン — テキストメッセージ
-    app.add_handler(MessageHandler(filters.Regex(r"^📰 ニュース生成$"), handle_news))
     app.add_handler(MessageHandler(filters.Regex(r"^📸 画像管理$"), handle_images))
     app.add_handler(MessageHandler(filters.Regex(r"^📓 写メ日記$"), handle_photo_diary))
-    app.add_handler(MessageHandler(filters.Regex(r"^✍️ SEO記事作成$"), handle_seo_menu))
-    app.add_handler(CommandHandler("seo", handle_seo_menu))
-    app.add_handler(MessageHandler(filters.Regex(r"^💰 仮想通貨$"), handle_crypto_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
-    app.add_handler(CommandHandler("agent", handle_agent_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
-    app.add_handler(CommandHandler("shiftdb", handle_shift_db_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🔗 掲載ページ確認$"), handle_media_pages))
     app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
 
@@ -2799,6 +2910,12 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     # インラインボタンコールバック
+    
+    app.add_handler(CallbackQueryHandler(handle_img_up_callback, pattern=r"^img_up$"))
+    app.add_handler(CallbackQueryHandler(handle_img_dl_callback, pattern=r"^img_dl$"))
+    app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
+    app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
+
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
