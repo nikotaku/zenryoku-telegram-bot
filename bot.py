@@ -54,6 +54,7 @@ import browser_agent
 import notion_shift_client
 from datetime import datetime, time
 import pytz
+import rion_auto_poster
 from bitbank_client import (
     get_portfolio,
     format_portfolio_message,
@@ -140,7 +141,8 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📸 画像管理"), KeyboardButton("📓 写メ日記")],
         [KeyboardButton("💴 経費を入力")],
         [KeyboardButton("🔑 APIキー更新"), KeyboardButton("🔗 掲載ページ確認")],
-        [KeyboardButton("⚙️ 各種管理画面")]
+        [KeyboardButton("⚙️ 各種管理画面")],
+        [KeyboardButton("🌸 りおん自動運用")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
@@ -2668,6 +2670,99 @@ async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+# ─── りおん自動運用 ───────────────────────────────────────────────────────
+async def handle_rion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """りおん自動運用メニュー"""
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✍️ 今すぐ投稿（ランダム）", callback_data="rion:post_random")],
+        [
+            InlineKeyboardButton("🌅 おはよう", callback_data="rion:post_morning"),
+            InlineKeyboardButton("📢 出勤告知", callback_data="rion:post_shift"),
+        ],
+        [
+            InlineKeyboardButton("💄 美容ネタ", callback_data="rion:post_beauty"),
+            InlineKeyboardButton("🧘 ピラティス", callback_data="rion:post_pilates"),
+        ],
+        [
+            InlineKeyboardButton("✈️ 旅行/パワースポット", callback_data="rion:post_travel"),
+            InlineKeyboardButton("🌙 おやすみ", callback_data="rion:post_night"),
+        ],
+        [InlineKeyboardButton("💬 仙台リプ実行（最大3件）", callback_data="rion:do_reply")],
+    ])
+    await update.message.reply_text(
+        "🌸 【りおん自動運用】\n\n"
+        "投稿タイプを選択するか、スケジューラーに任せてください。\n\n"
+        "📅 自動投稿: 08:30 / 13:00 / 17:30 / 23:30\n"
+        "💬 自動リプ: 30分おき（仙台関連KW）",
+        reply_markup=keyboard,
+    )
+
+
+async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """りおんメニューのインラインボタン処理"""
+    query = update.callback_query
+    await query.answer()
+    action = query.data.replace("rion:", "")
+
+    POST_TYPE_MAP = {
+        "post_random":  None,
+        "post_morning": "morning",
+        "post_shift":   "shift_announce",
+        "post_beauty":  "beauty",
+        "post_pilates": "pilates",
+        "post_travel":  "travel_power",
+        "post_night":   "night",
+    }
+
+    if action in POST_TYPE_MAP:
+        await query.edit_message_text("⏳ 投稿文を生成中...")
+        from rion_persona import generate_post
+        post_type = POST_TYPE_MAP[action]
+        text = generate_post(post_type)
+        if not text:
+            await query.edit_message_text("❌ 生成に失敗しました。")
+            return
+
+        # プレビュー表示 → 確認ボタン
+        context.user_data["rion_pending_post"] = text
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ この内容で投稿する", callback_data="rion:confirm_post")],
+            [InlineKeyboardButton("🔄 再生成", callback_data=f"rion:{action}")],
+            [InlineKeyboardButton("❌ キャンセル", callback_data="rion:cancel")],
+        ])
+        await query.edit_message_text(
+            f"📝 【投稿プレビュー】\n\n{text}",
+            reply_markup=keyboard,
+        )
+
+    elif action == "confirm_post":
+        text = context.user_data.pop("rion_pending_post", "")
+        if not text:
+            await query.edit_message_text("❌ 投稿内容が見つかりません。")
+            return
+        await query.edit_message_text("⏳ 投稿中...")
+        import asyncio
+        success = await asyncio.get_event_loop().run_in_executor(
+            None, rion_auto_poster.post_tweet, text
+        )
+        if success:
+            await query.edit_message_text(f"✅ 投稿しました！\n\n{text}")
+        else:
+            await query.edit_message_text("❌ 投稿に失敗しました。環境変数（RION_X_*）を確認してください。")
+
+    elif action == "do_reply":
+        await query.edit_message_text("⏳ 仙台関連ツイートを検索・返信中...")
+        import asyncio
+        count = await asyncio.get_event_loop().run_in_executor(
+            None, rion_auto_poster.search_and_reply, 3
+        )
+        await query.edit_message_text(f"✅ {count}件に返信しました。")
+
+    elif action == "cancel":
+        context.user_data.pop("rion_pending_post", None)
+        await query.edit_message_text("❌ キャンセルしました。")
+
+
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ — Gemini LLMで解析して適切な操作を実行"""
@@ -2905,6 +3000,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🔗 掲載ページ確認$"), handle_media_pages))
     app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
+    app.add_handler(MessageHandler(filters.Regex(r"^🌸 りおん自動運用$"), handle_rion_menu))
+    app.add_handler(CallbackQueryHandler(handle_rion_callback, pattern=r"^rion:"))
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -2944,6 +3041,14 @@ def main() -> None:
         logger.info("Telegramコマンドメニューを更新しました")
 
     app.post_init = post_init
+
+    # りおん自動投稿スケジューラーをバックグラウンドで起動
+    async def start_rion_scheduler(application):
+        import asyncio
+        asyncio.create_task(rion_auto_poster.run_scheduler())
+        logger.info("りおん自動投稿スケジューラーをバックグラウンドで起動しました")
+
+    app.post_init = lambda app: asyncio.gather(post_init(app), start_rion_scheduler(app))
 
     # ポーリング開始
     logger.info("全力エステBot を起動しました。Ctrl+C で停止します。")
