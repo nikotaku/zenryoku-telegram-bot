@@ -54,7 +54,6 @@ import browser_agent
 import notion_shift_client
 from datetime import datetime, time
 import pytz
-import rion_auto_poster
 from bitbank_client import (
     get_portfolio,
     format_portfolio_message,
@@ -79,6 +78,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+try:
+    import rion_auto_poster
+    RION_ENABLED = True
+except ImportError as e:
+    logger.warning(f"rion_auto_poster import失敗（tweepy未インストール？）: {e}")
+    RION_ENABLED = False
 
 
 # ─── ブログ一斉投稿 ConversationHandler ステート ────────────────
@@ -2673,6 +2678,9 @@ async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_
 # ─── りおん自動運用 ───────────────────────────────────────────────────────
 async def handle_rion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """りおん自動運用メニュー"""
+    if not RION_ENABLED:
+        await update.message.reply_text("⚠️ tweepyが未インストールのため利用できません。\n`pip install tweepy` を実行してください。")
+        return
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✍️ 今すぐ投稿（ランダム）", callback_data="rion:post_random")],
         [
@@ -3043,12 +3051,14 @@ def main() -> None:
     app.post_init = post_init
 
     # りおん自動投稿スケジューラーをバックグラウンドで起動
-    async def start_rion_scheduler(application):
-        import asyncio
-        asyncio.create_task(rion_auto_poster.run_scheduler())
-        logger.info("りおん自動投稿スケジューラーをバックグラウンドで起動しました")
-
-    app.post_init = lambda app: asyncio.gather(post_init(app), start_rion_scheduler(app))
+    if RION_ENABLED:
+        async def start_rion_scheduler(application):
+            import asyncio
+            asyncio.create_task(rion_auto_poster.run_scheduler())
+            logger.info("りおん自動投稿スケジューラーをバックグラウンドで起動しました")
+        app.post_init = lambda app: asyncio.gather(post_init(app), start_rion_scheduler(app))
+    else:
+        app.post_init = post_init
 
     # ポーリング開始
     logger.info("全力エステBot を起動しました。Ctrl+C で停止します。")
