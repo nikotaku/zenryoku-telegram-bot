@@ -3048,15 +3048,13 @@ def main() -> None:
         ])
         logger.info("Telegramコマンドメニューを更新しました")
 
-    app.post_init = post_init
-
-    # りおん自動投稿スケジューラーをバックグラウンドで起動
     if RION_ENABLED:
-        async def start_rion_scheduler(application):
+        async def post_init_with_rion(application):
             import asyncio
+            await post_init(application)
             asyncio.create_task(rion_auto_poster.run_scheduler())
             logger.info("りおん自動投稿スケジューラーをバックグラウンドで起動しました")
-        app.post_init = lambda app: asyncio.gather(post_init(app), start_rion_scheduler(app))
+        app.post_init = post_init_with_rion
     else:
         app.post_init = post_init
 
