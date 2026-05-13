@@ -82,9 +82,16 @@ async def upload_telegram_photo(bot, file_id: str, therapist_name: str = "") -> 
         ).execute()
 
         os.unlink(tmp_path)
-        
-        # Google Drive上の画像IDから直接表示可能なURLを生成する
+
         file_id = uploaded_file.get('id')
+
+        # ファイルを「リンクを知っている全員が閲覧可能」に設定
+        service.permissions().create(
+            fileId=file_id,
+            body={'type': 'anyone', 'role': 'reader'},
+        ).execute()
+
+        # Google Drive直接表示URL
         direct_link = f"https://drive.google.com/uc?export=view&id={file_id}"
         
         logger.info(f"Google Driveに画像をアップロードしました: {direct_link}")
