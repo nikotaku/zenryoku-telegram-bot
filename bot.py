@@ -2723,11 +2723,19 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if action in POST_TYPE_MAP:
         await query.edit_message_text("⏳ 投稿文を生成中...")
+        import asyncio as _asyncio
         from rion_persona import generate_post
         post_type = POST_TYPE_MAP[action]
-        text = generate_post(post_type)
+        try:
+            text = await _asyncio.wait_for(
+                _asyncio.get_event_loop().run_in_executor(None, generate_post, post_type),
+                timeout=30.0
+            )
+        except _asyncio.TimeoutError:
+            await query.edit_message_text("❌ 生成タイムアウト（30秒）。GEMINI_API_KEYを確認してください。")
+            return
         if not text:
-            await query.edit_message_text("❌ 生成に失敗しました。")
+            await query.edit_message_text("❌ 生成に失敗しました。GEMINI_API_KEYが設定されているか確認してください。")
             return
 
         # プレビュー表示 → 確認ボタン
