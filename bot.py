@@ -2749,13 +2749,13 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         await query.edit_message_text("⏳ 投稿中...")
         import asyncio
-        success = await asyncio.get_event_loop().run_in_executor(
+        success, err_msg = await asyncio.get_event_loop().run_in_executor(
             None, rion_auto_poster.post_tweet, text
         )
         if success:
             await query.edit_message_text(f"✅ 投稿しました！\n\n{text}")
         else:
-            await query.edit_message_text("❌ 投稿に失敗しました。環境変数（RION_X_*）を確認してください。")
+            await query.edit_message_text(f"❌ 投稿に失敗しました。\n\n{err_msg}")
 
     elif action == "do_reply":
         await query.edit_message_text("⏳ 仙台関連ツイートを検索・返信中...")

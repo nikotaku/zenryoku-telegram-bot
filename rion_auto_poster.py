@@ -84,19 +84,19 @@ def _save_replied_id(tweet_id: str):
     REPLIED_IDS_FILE.write_text(json.dumps(ids, ensure_ascii=False))
 
 
-def post_tweet(text: str) -> bool:
-    """ツイートを投稿する。"""
+def post_tweet(text: str) -> tuple[bool, str]:
+    """ツイートを投稿する。(success, error_message) を返す。"""
     client = _get_client()
     if not client:
-        return False
+        return False, "X API 認証情報が不足しています（RION_X_* 環境変数を確認）"
     try:
         resp = client.create_tweet(text=text)
         tweet_id = resp.data["id"]
         logger.info(f"投稿成功: {tweet_id} | {text[:30]}...")
-        return True
+        return True, ""
     except Exception as e:
         logger.error(f"投稿エラー: {e}")
-        return False
+        return False, str(e)
 
 
 def search_and_reply(max_replies: int = 5) -> int:
