@@ -55,23 +55,36 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 def _get_drive_service():
-    creds = None
+    # まずサービスアカウントJSONを試す（サーバー環境推奨）
+    sa_json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if sa_json_str:
+        try:
+            sa_info = json.loads(sa_json_str)
+            if isinstance(sa_info, str):
+                sa_info = json.loads(sa_info)
+            creds = service_account.Credentials.from_service_account_info(
+                sa_info, scopes=["https://www.googleapis.com/auth/drive"]
+            )
+            return build("drive", "v3", credentials=creds, cache_discovery=False)
+        except Exception as e:
+            logger.error(f"サービスアカウント認証エラー: {e}")
+
+    # フォールバック: OAuthトークン（token.json）
     token_path = "/root/.openclaw/workspace/zenryoku-telegram-bot/token.json"
-    
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, ["https://www.googleapis.com/auth/drive"])
-        
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Save the refreshed credentials
-            with open(token_path, "w") as token:
-                token.write(creds.to_json())
-        else:
-            logger.error("No valid credentials found in token.json. OAuth required.")
-            return None
-            
+    if not os.path.exists(token_path):
+        logger.error("Google Drive 認証情報がありません。GOOGLE_SERVICE_ACCOUNT_JSON を設定してください。")
+        return None
+
     try:
+        creds = Credentials.from_authorized_user_file(token_path, ["https://www.googleapis.com/auth/drive"])
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                with open(token_path, "w") as token:
+                    token.write(creds.to_json())
+            else:
+                logger.error("token.json の認証情報が無効です。再認証が必要です。")
+                return None
         return build("drive", "v3", credentials=creds, cache_discovery=False)
     except Exception as e:
         logger.error(f"Google Drive API 初期化エラー: {e}")
