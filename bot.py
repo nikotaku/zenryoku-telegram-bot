@@ -143,10 +143,12 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📲 ブログ一斉投稿")],
         [KeyboardButton("🔔 イマスグ情報"), KeyboardButton("💼 出稼ぎスケジュール登録")],
-        [KeyboardButton("📸 画像管理"), KeyboardButton("📓 写メ日記")],
-        [KeyboardButton("💴 経費を入力")],
-        [KeyboardButton("🔑 APIキー更新"), KeyboardButton("🔗 掲載ページ確認")],
-        [KeyboardButton("⚙️ 各種管理画面")],
+        [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
+        [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
+        [KeyboardButton("✍️ SEO記事作成")],
+        [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
+        [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
+        [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
         [KeyboardButton("🌸 りおん自動運用")],
     ],
     resize_keyboard=True,
@@ -335,11 +337,8 @@ async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_T
     keyboard = [
         [InlineKeyboardButton("👧 セラピスト一覧", callback_data="dl_cat:therapists")],
         [InlineKeyboardButton("📁 その他フォルダ", callback_data="dl_cat:others")],
-        [InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")]
+        [InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")],
     ]
-    if row:
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
     
     await query.edit_message_text(
         "⬇️ 【画像ダウンロード】\n画像を取得したいセラピストを選択してください。（最新5枚）",
@@ -2771,6 +2770,7 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("❌ キャンセルしました。")
 
 
+
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ — Gemini LLMで解析して適切な操作を実行"""
@@ -3006,6 +3006,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^📓 写メ日記$"), handle_photo_diary))
     app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
+    app.add_handler(CommandHandler("shiftdb", handle_shift_db_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🔗 掲載ページ確認$"), handle_media_pages))
     app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
     app.add_handler(MessageHandler(filters.Regex(r"^🌸 りおん自動運用$"), handle_rion_menu))
