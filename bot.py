@@ -382,62 +382,93 @@ async def handle_dl_cat_callback(update: Update, context: ContextTypes.DEFAULT_T
 async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    
+
     data = query.data.replace("dl_therapist:", "")
     if data == "cancel":
         await query.edit_message_text("❌ ダウンロードをキャンセルしました。")
         return
-        
-    await query.edit_message_text(f"⏳ {data}の最新画像(最大5枚)をGoogle Driveから取得中...")
+
+    await query.edit_message_text(f"⏳ {data}の画像一覧を取得中...")
 
     import asyncio as _asyncio
-    from image_uploader import get_latest_images_from_drive
+    from image_uploader import get_image_list_from_drive
     try:
-        images = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, get_latest_images_from_drive, data, 5),
-            timeout=60.0
+        files = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, get_image_list_from_drive, data, 10),
+            timeout=30.0
         )
     except _asyncio.TimeoutError:
-        await query.message.reply_text("❌ 画像取得タイムアウト（60秒）。Drive認証またはフォルダ共有を確認してください。")
+        await query.edit_message_text("❌ タイムアウト（30秒）。Drive認証またはフォルダ共有を確認してください。")
         return
     except Exception as e:
-        logger.error(f"画像取得エラー: {e}")
-        await query.message.reply_text(f"❌ 画像取得エラー: {str(e)[:200]}")
+        await query.edit_message_text(f"❌ 取得エラー: {str(e)[:200]}")
         return
 
-    if not images:
-        await query.message.reply_text(
+    if not files:
+        await query.edit_message_text(
             f"❌ {data}の画像が見つかりませんでした。\n\n"
-            f"考えられる原因:\n"
-            f"・GOOGLE_SERVICE_ACCOUNT_JSON 未設定\n"
             f"・Driveフォルダがサービスアカウントに未共有\n"
-            f"・フォルダにそもそも画像がない"
+            f"・フォルダに画像がない"
         )
         return
-        
-    from telegram import InputMediaPhoto
-    media_group = []
-    for img in images:
-        media_group.append(InputMediaPhoto(media=img["bytes"], caption=img["name"]))
-        
-    try:
-        from telegram import InputMediaPhoto
-        media_group = []
-        for img in images:
-            media_group.append(InputMediaPhoto(media=img["bytes"], caption=img["name"]))
-            
-        await context.bot.send_media_group(chat_id=query.message.chat_id, media=media_group)
-        await query.message.reply_text(f"✅ {data}の画像を取得しました。")
-    except Exception as e:
-        logger.error(f"Media send error: {e}")
-        # フォールバック: 1枚ずつ送信を試みる
+
+    # ファイル一覧をuser_dataに保存してボタン表示
+    context.user_data["dl_files"] = {f["id"]: f["name"] for f in files}
+    context.user_data["dl_therapist"] = data
+
+    keyboard = []
+    for i, f in enumerate(files):
+        name = f["name"][:30]
+        keyboard.append([InlineKeyboardButton(f"📷 {i+1}. {name}", callback_data=f"dl_file:{f['id']}")])
+    keyboard.append([InlineKeyboardButton("📥 全部ダウンロード", callback_data="dl_file:ALL")])
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
+
+    await query.edit_message_text(
+        f"📁 {data}の画像一覧（{len(files)}枚）\nダウンロードしたい画像を選んでください。",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def handle_dl_file_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    file_id = query.data.replace("dl_file:", "")
+    therapist = context.user_data.get("dl_therapist", "")
+    files_map = context.user_data.get("dl_files", {})
+
+    import asyncio as _asyncio
+    from image_uploader import download_image_from_drive, get_image_list_from_drive
+
+    if file_id == "ALL":
+        await query.edit_message_text(f"⏳ {therapist}の画像を全部ダウンロード中...")
+        targets = list(files_map.items())
+    else:
+        name = files_map.get(file_id, file_id)
+        await query.edit_message_text(f"⏳ {name} をダウンロード中...")
+        targets = [(file_id, files_map.get(file_id, file_id))]
+
+    success = 0
+    for fid, fname in targets:
         try:
-            for img in images:
-                await context.bot.send_photo(chat_id=query.message.chat_id, photo=img["bytes"], caption=img["name"])
-            await query.message.reply_text(f"✅ {data}の画像を取得しました。(分割送信)")
-        except Exception as e2:
-            logger.error(f"Fallback send error: {e2}")
-            await query.message.reply_text("❌ 画像の送信に完全に失敗しました。ファイルサイズや形式がTelegramの制限に引っかかっています。")
+            data = await _asyncio.wait_for(
+                _asyncio.get_event_loop().run_in_executor(None, download_image_from_drive, fid),
+                timeout=60.0
+            )
+            if data:
+                await context.bot.send_photo(
+                    chat_id=query.message.chat_id,
+                    photo=data,
+                    caption=fname
+                )
+                success += 1
+        except Exception as e:
+            logger.error(f"DL error {fid}: {e}")
+
+    if success:
+        await query.message.reply_text(f"✅ {success}枚ダウンロードしました。")
+    else:
+        await query.message.reply_text("❌ ダウンロードに失敗しました。")
 
 async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """セラピスト選択コールバック — 画像をNotionに保存"""
@@ -3047,6 +3078,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_img_dl_callback, pattern=r"^img_dl$"))
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
+    app.add_handler(CallbackQueryHandler(handle_dl_file_callback, pattern=r"^dl_file:"))
 
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
