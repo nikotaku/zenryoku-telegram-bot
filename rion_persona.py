@@ -36,12 +36,14 @@ Xに投稿するツイートを書いてください。
 - NGワード: 性的表現、直接的な営業、連絡先の記載
 
 【投稿のルール】
-- 140文字以内
+- 100〜200文字を目安に書く（短すぎず、読み応えのある長さ）
+- 必ず文章を最後まで完結させること（途中で終わらない）
 - 絵文字を2〜4個程度使う（やりすぎない）
 - ハッシュタグは最後に1〜2個まで
 - 自然でリアルな日常感を大切に
 - 押し付けがましい営業感は出さない
 - 体験談・気づき・日常のひとコマを中心に
+- 読んだ人が「いいね」したくなるような温かみのある内容に
 
 出力はツイート本文のみ。説明文・前置き不要。
 """
@@ -78,7 +80,7 @@ def generate_post(post_type: str = None) -> str:
         model = _get_model()
         response = model.generate_content(
             contents=[{"role": "user", "parts": [{"text": f"{SYSTEM_PROMPT}\n\n【今回の投稿テーマ】{prompt}"}]}],
-            generation_config=genai.types.GenerationConfig(max_output_tokens=200),
+            generation_config=genai.types.GenerationConfig(max_output_tokens=500),
         )
         return response.text.strip()
     except Exception as e:
