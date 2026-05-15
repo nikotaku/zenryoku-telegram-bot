@@ -388,13 +388,13 @@ async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEF
         await query.edit_message_text("❌ ダウンロードをキャンセルしました。")
         return
 
-    await query.edit_message_text(f"⏳ {data}の画像一覧を取得中...")
+    await query.edit_message_text(f"⏳ {data}の画像を取得中...")
 
     import asyncio as _asyncio
-    from image_uploader import get_image_list_from_drive
+    from image_uploader import get_image_list_from_drive, download_image_from_drive
     try:
         files = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, get_image_list_from_drive, data, 10),
+            _asyncio.get_event_loop().run_in_executor(None, get_image_list_from_drive, data, 50),
             timeout=30.0
         )
     except _asyncio.TimeoutError:
@@ -412,63 +412,30 @@ async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEF
         )
         return
 
-    # ファイル一覧をuser_dataに保存してボタン表示
-    context.user_data["dl_files"] = {f["id"]: f["name"] for f in files}
-    context.user_data["dl_therapist"] = data
-
-    keyboard = []
-    for i, f in enumerate(files):
-        name = f["name"][:30]
-        keyboard.append([InlineKeyboardButton(f"📷 {i+1}. {name}", callback_data=f"dl_file:{f['id']}")])
-    keyboard.append([InlineKeyboardButton("📥 全部ダウンロード", callback_data="dl_file:ALL")])
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
-
-    await query.edit_message_text(
-        f"📁 {data}の画像一覧（{len(files)}枚）\nダウンロードしたい画像を選んでください。",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def handle_dl_file_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-
-    file_id = query.data.replace("dl_file:", "")
-    therapist = context.user_data.get("dl_therapist", "")
-    files_map = context.user_data.get("dl_files", {})
-
-    import asyncio as _asyncio
-    from image_uploader import download_image_from_drive, get_image_list_from_drive
-
-    if file_id == "ALL":
-        await query.edit_message_text(f"⏳ {therapist}の画像を全部ダウンロード中...")
-        targets = list(files_map.items())
-    else:
-        name = files_map.get(file_id, file_id)
-        await query.edit_message_text(f"⏳ {name} をダウンロード中...")
-        targets = [(file_id, files_map.get(file_id, file_id))]
+    await query.edit_message_text(f"⏳ {data}の画像 {len(files)}枚を送信中...")
 
     success = 0
-    for fid, fname in targets:
+    for f in files:
         try:
-            data = await _asyncio.wait_for(
-                _asyncio.get_event_loop().run_in_executor(None, download_image_from_drive, fid),
+            img_bytes = await _asyncio.wait_for(
+                _asyncio.get_event_loop().run_in_executor(None, download_image_from_drive, f["id"]),
                 timeout=60.0
             )
-            if data:
+            if img_bytes:
                 await context.bot.send_photo(
                     chat_id=query.message.chat_id,
-                    photo=data,
-                    caption=fname
+                    photo=img_bytes,
+                    caption=f["name"]
                 )
                 success += 1
         except Exception as e:
-            logger.error(f"DL error {fid}: {e}")
+            logger.error(f"DL error {f['id']}: {e}")
 
     if success:
-        await query.message.reply_text(f"✅ {success}枚ダウンロードしました。")
+        await query.message.reply_text(f"✅ {data}の画像 {success}枚を送信しました。")
     else:
-        await query.message.reply_text("❌ ダウンロードに失敗しました。")
+        await query.message.reply_text("❌ 画像の送信に失敗しました。")
+
 
 async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """セラピスト選択コールバック — 画像をNotionに保存"""
@@ -3078,7 +3045,6 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_img_dl_callback, pattern=r"^img_dl$"))
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
-    app.add_handler(CallbackQueryHandler(handle_dl_file_callback, pattern=r"^dl_file:"))
 
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
