@@ -389,12 +389,30 @@ async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEF
         return
         
     await query.edit_message_text(f"⏳ {data}の最新画像(最大5枚)をGoogle Driveから取得中...")
-    
+
+    import asyncio as _asyncio
     from image_uploader import get_latest_images_from_drive
-    images = get_latest_images_from_drive(data, limit=5)
-    
+    try:
+        images = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, get_latest_images_from_drive, data, 5),
+            timeout=60.0
+        )
+    except _asyncio.TimeoutError:
+        await query.message.reply_text("❌ 画像取得タイムアウト（60秒）。Drive認証またはフォルダ共有を確認してください。")
+        return
+    except Exception as e:
+        logger.error(f"画像取得エラー: {e}")
+        await query.message.reply_text(f"❌ 画像取得エラー: {str(e)[:200]}")
+        return
+
     if not images:
-        await query.message.reply_text(f"❌ {data}の画像が見つかりませんでした。")
+        await query.message.reply_text(
+            f"❌ {data}の画像が見つかりませんでした。\n\n"
+            f"考えられる原因:\n"
+            f"・GOOGLE_SERVICE_ACCOUNT_JSON 未設定\n"
+            f"・Driveフォルダがサービスアカウントに未共有\n"
+            f"・フォルダにそもそも画像がない"
+        )
         return
         
     from telegram import InputMediaPhoto
