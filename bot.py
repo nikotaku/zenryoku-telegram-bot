@@ -436,7 +436,6 @@ async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEF
     else:
         await query.message.reply_text("❌ 画像の送信に失敗しました。")
 
-
 async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """セラピスト選択コールバック — 画像をNotionに保存"""
     query = update.callback_query
@@ -3045,6 +3044,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_img_dl_callback, pattern=r"^img_dl$"))
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
+    app.add_handler(CallbackQueryHandler(handle_dl_file_callback, pattern=r"^dl_file:"))
 
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
