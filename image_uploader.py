@@ -159,6 +159,54 @@ def _get_all_subfolders(service, folder_id):
         logger.error(f"Error fetching subfolders for {folder_id}: {e}")
     return subfolders
 
+def get_image_list_from_drive(therapist_name: str, limit: int = 10):
+    """ファイルのメタデータのみ取得（ダウンロードなし）。"""
+    service = _get_drive_service()
+    if not service:
+        logger.error("Drive service failed to init")
+        return []
+
+    root_folder_id = FOLDER_MAP.get(therapist_name)
+    if not root_folder_id:
+        logger.error(f"No folder ID for {therapist_name}")
+        return []
+
+    try:
+        folder_ids = _get_all_subfolders(service, root_folder_id)
+        parent_queries = [f"'{fid}' in parents" for fid in folder_ids]
+        parent_query_str = "(" + " or ".join(parent_queries) + ")"
+        query = f"{parent_query_str} and mimeType contains 'image/' and trashed=false"
+        results = service.files().list(
+            q=query, orderBy="createdTime desc", pageSize=limit,
+            fields="files(id, name, createdTime)"
+        ).execute()
+        return results.get('files', [])
+    except Exception as e:
+        logger.error(f"Error listing images: {e}")
+        return []
+
+
+def download_image_from_drive(file_id: str) -> bytes | None:
+    """指定IDの画像を1枚ダウンロードしてbytesで返す。"""
+    import io
+    from googleapiclient.http import MediaIoBaseDownload
+    service = _get_drive_service()
+    if not service:
+        return None
+    try:
+        request = service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        fh.seek(0)
+        return fh.read()
+    except Exception as e:
+        logger.error(f"Error downloading image {file_id}: {e}")
+        return None
+
+
 def get_latest_images_from_drive(therapist_name: str, limit: int = 5):
     service = _get_drive_service()
     if not service:
