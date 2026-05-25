@@ -67,6 +67,7 @@ from bitbank_client import (
 
 # ─── 設定 ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+PHOTO_CHANNEL_ID = int(os.environ.get("PHOTO_CHANNEL_ID", "-5269472642"))
 
 if not BOT_TOKEN:
     raise ValueError("環境変数 TELEGRAM_BOT_TOKEN が設定されていません")
@@ -342,41 +343,27 @@ async def handle_img_up_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.reply_text("📷 アップロードしたい画像を送信してください。送信後、保存先のセラピストを選択できます。")
 
 async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """画像DL: Driveルートフォルダを動的取得して表示（失敗時はFOLDER_MAPで代替）"""
+    """画像DL: photo_storageのカテゴリ一覧を表示"""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("⏳ Driveフォルダを取得中...")
 
-    import asyncio as _asyncio
-    from image_uploader import list_drive_folders, FOLDER_MAP
-    folders = []
-    try:
-        folders = await _asyncio.wait_for(
-            _asyncio.get_running_loop().run_in_executor(None, list_drive_folders, None),
-            timeout=8.0
+    from photo_storage import get_all_names
+    names = get_all_names()
+
+    if not names:
+        await query.edit_message_text(
+            "📭 登録済みの写真がありません。\n\n"
+            "チャンネルに写真を「セラピスト名」キャプション付きで投稿すると自動登録されます。",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ 閉じる", callback_data="dl_therapist:cancel")
+            ]])
         )
-    except Exception as e:
-        logger.error(f"Drive folder list error: {e}")
-
-    # Drive取得失敗時はFOLDER_MAPで代替
-    if not folders:
-        folders = [{"id": fid, "name": name} for name, fid in FOLDER_MAP.items() if fid]
-        if not folders:
-            await query.edit_message_text(
-                "❌ フォルダ取得に失敗しました。Drive認証を確認してください。",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")
-                ]])
-            )
-            return
+        return
 
     keyboard = []
     row = []
-    for f in folders:
-        row.append(InlineKeyboardButton(
-            f["name"][:14],
-            callback_data=f"dl_cat:{f['id']}:{f['name'][:12]}"
-        ))
+    for name in names:
+        row.append(InlineKeyboardButton(name[:14], callback_data=f"dl_photo:{name}"))
         if len(row) == 3:
             keyboard.append(row)
             row = []
@@ -385,9 +372,51 @@ async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_T
     keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
 
     await query.edit_message_text(
-        "⬇️ 【画像ダウンロード】\nフォルダを選択してください：",
+        "⬇️ 【画像ダウンロード】\nカテゴリを選択してください：",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def handle_dl_photo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """選択したカテゴリの写真を全件送信"""
+    query = update.callback_query
+    await query.answer()
+    name = query.data.replace("dl_photo:", "")
+
+    from photo_storage import get_photos
+    file_ids = get_photos(name)
+
+    if not file_ids:
+        await query.edit_message_text(f"❌ {name}の写真が登録されていません。")
+        return
+
+    await query.edit_message_text(f"⏳ {name}の写真 {len(file_ids)}枚を送信中...")
+    success = 0
+    for fid in file_ids:
+        try:
+            await context.bot.send_photo(chat_id=query.message.chat_id, photo=fid, caption=name)
+            success += 1
+        except Exception as e:
+            logger.error(f"写真送信エラー {fid}: {e}")
+
+    await query.message.reply_text(f"✅ {name}の写真 {success}枚を送信しました。")
+
+
+async def handle_channel_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """チャンネルへの写真投稿を受け取ってphoto_storageに登録"""
+    post = update.channel_post
+    if not post or post.chat.id != PHOTO_CHANNEL_ID:
+        return
+    if not post.photo:
+        return
+    caption = (post.caption or "").strip()
+    if not caption:
+        logger.warning("チャンネル写真にキャプションなし: スキップ")
+        return
+    file_id = post.photo[-1].file_id
+    from photo_storage import add_photo
+    add_photo(caption, file_id)
+    logger.info(f"チャンネル写真登録: {caption}")
 
 
 async def handle_dl_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -754,24 +783,13 @@ async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data["post_body"] = text
     title = context.user_data["post_title"]
 
-    # Drive トップフォルダを動的取得
-    import asyncio as _asyncio
-    from image_uploader import list_drive_folders
-    try:
-        folders = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, None),
-            timeout=20.0
-        )
-    except Exception:
-        folders = []
+    from photo_storage import get_all_names
+    names = get_all_names()
 
     rows = []
     row = []
-    for f in folders:
-        row.append(InlineKeyboardButton(
-            f["name"][:14],
-            callback_data=f"post_dl_folder:{f['id']}:{f['name'][:10]}"
-        ))
+    for name in names:
+        row.append(InlineKeyboardButton(name[:14], callback_data=f"post_ch:{name}"))
         if len(row) == 3:
             rows.append(row)
             row = []
@@ -780,13 +798,17 @@ async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     rows.append([InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")])
     rows.append([InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")])
 
-    await update.message.reply_text(
+    msg = (
         f"✅ 本文を設定しました。\n\n"
         f"【タイトル】{title}\n"
         f"【本文】{text[:100]}{'...' if len(text) > 100 else ''}\n\n"
-        "📁 Driveフォルダを選ぶか、写真を直接送ってください：",
-        reply_markup=InlineKeyboardMarkup(rows)
     )
+    if names:
+        msg += "📸 カテゴリを選ぶか、写真を直接送ってください："
+    else:
+        msg += "📷 写真を直接送るか、画像なしで投稿してください\n（先にチャンネルに写真を登録してください）"
+
+    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
     return POST_PHOTO
 
 
@@ -848,178 +870,97 @@ async def _execute_post(title: str, body: str, image_bytes: bytes | None, send_m
     return result_text
 
 
-async def _post_show_drive_top(query, title: str, body: str):
-    """Drive トップフォルダ一覧をボタン表示（動的取得）"""
-    import asyncio as _asyncio
-    from image_uploader import list_drive_folders
-    try:
-        folders = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, None),
-            timeout=20.0
-        )
-    except Exception:
-        folders = []
-
-    keyboard = []
-    row = []
-    for f in folders:
-        # フォルダIDをcallback_dataに埋め込む（"post_dl_folder:{id}:{name}"）
-        row.append(InlineKeyboardButton(
-            f["name"][:14],
-            callback_data=f"post_dl_folder:{f['id']}:{f['name'][:10]}"
-        ))
-        if len(row) == 3:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")])
-    keyboard.append([InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")])
-
-    text = (
-        f"【タイトル】{title}\n"
-        f"【本文】{body[:80]}{'...' if len(body) > 80 else ''}\n\n"
-        "📁 Driveフォルダを選択してください："
-    )
-    if folders:
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-    else:
-        await query.edit_message_text(
-            text + "\n\n⚠️ フォルダ取得失敗。写真を直接送るか画像なしで投稿してください。",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")],
-                [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")],
-            ])
-        )
-
-
-async def post_drive_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Drive カテゴリ選択（後方互換）→ トップフォルダ一覧表示に統合"""
+async def post_channel_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """チャンネル写真カテゴリ選択 → 写真一覧を表示して選択させる"""
     query = update.callback_query
     await query.answer()
-    title = context.user_data.get("post_title", "")
-    body = context.user_data.get("post_body", "")
-    await _post_show_drive_top(query, title, body)
-    return POST_PHOTO
+    name = query.data.replace("post_ch:", "")
 
+    from photo_storage import get_photos
+    file_ids = get_photos(name)
 
-async def post_drive_folder_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Drive フォルダ内を表示：サブフォルダがあればフォルダ一覧、なければ画像一覧"""
-    query = update.callback_query
-    await query.answer()
-
-    # callback_data: "post_dl_folder:{folder_id}:{folder_name}"
-    parts = query.data.replace("post_dl_folder:", "").split(":", 1)
-    folder_id = parts[0]
-    folder_name = parts[1] if len(parts) > 1 else folder_id
-
-    await query.edit_message_text(f"⏳ {folder_name} を確認中...")
-
-    import asyncio as _asyncio
-    from image_uploader import list_drive_folders, get_image_list_by_folder_id
-
-    # サブフォルダを確認
-    try:
-        subfolders = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, folder_id),
-            timeout=20.0
-        )
-    except Exception:
-        subfolders = []
-
-    if subfolders:
-        # サブフォルダ一覧を表示
-        keyboard = []
-        row = []
-        for f in subfolders:
-            row.append(InlineKeyboardButton(
-                f["name"][:14],
-                callback_data=f"post_dl_folder:{f['id']}:{f['name'][:10]}"
-            ))
-            if len(row) == 3:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        keyboard.append([
-            InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back"),
-            InlineKeyboardButton("📤 スキップ", callback_data="post_photo:skip"),
-        ])
+    if not file_ids:
         await query.edit_message_text(
-            f"📁 {folder_name}\nフォルダを選択してください：",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return POST_PHOTO
-
-    # 画像一覧を表示
-    try:
-        files = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, get_image_list_by_folder_id, folder_id, 20),
-            timeout=30.0
-        )
-    except _asyncio.TimeoutError:
-        await query.edit_message_text("❌ タイムアウト。再度フォルダを選択してください。")
-        return POST_PHOTO
-    except Exception as e:
-        await query.edit_message_text(f"❌ 取得エラー: {str(e)[:100]}")
-        return POST_PHOTO
-
-    if not files:
-        await query.edit_message_text(
-            f"❌ {folder_name}に画像がありません。",
+            f"❌ {name}の写真が登録されていません。\n"
+            "チャンネルに写真を投稿してください。",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back")
+                InlineKeyboardButton("🔙 戻る", callback_data="post_ch_back")
             ]])
         )
         return POST_PHOTO
 
-    keyboard = []
-    row = []
-    for f in files[:18]:
-        row.append(InlineKeyboardButton(
-            f["name"][:16],
-            callback_data=f"post_dl_img:{f['id']}"
-        ))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([
-        InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back"),
-        InlineKeyboardButton("📤 スキップ", callback_data="post_photo:skip"),
-    ])
-    await query.edit_message_text(
-        f"📁 {folder_name} ({len(files)}件)\n画像を選択してください：",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(f"📸 {name}の写真（{len(file_ids)}枚）を送信します...")
+
+    for i, fid in enumerate(file_ids[-10:], 1):
+        try:
+            await query.message.reply_photo(
+                photo=fid,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(f"✅ この写真を使う", callback_data=f"post_ch_pick:{fid}")
+                ]])
+            )
+        except Exception as e:
+            logger.error(f"写真送信エラー: {e}")
+
+    await query.message.reply_text(
+        "上の写真から選んでください。",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")],
+        ])
     )
     return POST_PHOTO
 
 
-async def post_drive_img_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Drive から選択した画像で一斉投稿"""
+async def post_channel_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """チャンネル写真を選択して一斉投稿"""
     query = update.callback_query
     await query.answer()
-    file_id = query.data.replace("post_dl_img:", "")
+    file_id = query.data.replace("post_ch_pick:", "")
     title = context.user_data.get("post_title", "")
     body = context.user_data.get("post_body", "")
 
-    await query.edit_message_text(f"⏳ 画像をダウンロード中...")
+    await query.edit_message_reply_markup(reply_markup=None)
+    msg = await query.message.reply_text("⏳ 写真をダウンロード中...")
 
-    import asyncio as _asyncio
-    from image_uploader import download_image_from_drive
     try:
-        image_bytes = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, download_image_from_drive, file_id),
-            timeout=60.0
-        )
+        tg_file = await context.bot.get_file(file_id)
+        import io, httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(tg_file.file_path, timeout=30)
+        image_bytes = resp.content
     except Exception as e:
-        await query.edit_message_text(f"❌ ダウンロードエラー: {str(e)[:100]}")
+        await msg.edit_text(f"❌ 写真取得エラー: {str(e)[:100]}")
         return POST_PHOTO
 
-    if not image_bytes:
-        await query.edit_message_text("❌ 画像のダウンロードに失敗しました。")
-        return POST_PHOTO
+    await msg.edit_text(f"⏳ 「{title}」を一斉投稿中...")
+    await _execute_post(title, body, image_bytes, msg.reply_text)
+    return ConversationHandler.END
+
+
+async def post_ch_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """写真選択から戻る"""
+    query = update.callback_query
+    await query.answer()
+    from photo_storage import get_all_names
+    names = get_all_names()
+    title = context.user_data.get("post_title", "")
+    body = context.user_data.get("post_body", "")
+    rows = []
+    row = []
+    for name in names:
+        row.append(InlineKeyboardButton(name[:14], callback_data=f"post_ch:{name}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")])
+    rows.append([InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")])
+    await query.edit_message_text(
+        f"【タイトル】{title}\n【本文】{body[:80]}...\n\n📸 カテゴリを選んでください：",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+    return POST_PHOTO
 
     await query.edit_message_text(f"⏳ 「{title}」を一斉投稿中...")
     await _execute_post(title, body, image_bytes, query.message.reply_text)
@@ -3212,9 +3153,9 @@ def main() -> None:
                 MessageHandler(filters.PHOTO, post_photo),
                 CallbackQueryHandler(post_photo_skip, pattern="^post_photo:skip$"),
                 CallbackQueryHandler(post_photo, pattern="^post_photo:manual$"),
-                CallbackQueryHandler(post_drive_cat_callback, pattern="^post_dl_cat:"),
-                CallbackQueryHandler(post_drive_folder_callback, pattern="^post_dl_folder:"),
-                CallbackQueryHandler(post_drive_img_callback, pattern="^post_dl_img:"),
+                CallbackQueryHandler(post_channel_name_callback, pattern="^post_ch:"),
+                CallbackQueryHandler(post_channel_pick_callback, pattern="^post_ch_pick:"),
+                CallbackQueryHandler(post_ch_back_callback, pattern="^post_ch_back$"),
             ],
         },
         fallbacks=[
@@ -3318,8 +3259,10 @@ def main() -> None:
     
     app.add_handler(CallbackQueryHandler(handle_img_up_callback, pattern=r"^img_up$"))
     app.add_handler(CallbackQueryHandler(handle_img_dl_callback, pattern=r"^img_dl$"))
+    app.add_handler(CallbackQueryHandler(handle_dl_photo_callback, pattern=r"^dl_photo:"))
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS & filters.PHOTO, handle_channel_photo))
 
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
