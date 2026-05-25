@@ -342,30 +342,33 @@ async def handle_img_up_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.reply_text("📷 アップロードしたい画像を送信してください。送信後、保存先のセラピストを選択できます。")
 
 async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """画像DL: Driveルートフォルダを動的取得して表示"""
+    """画像DL: Driveルートフォルダを動的取得して表示（失敗時はFOLDER_MAPで代替）"""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("⏳ Driveフォルダを取得中...")
 
     import asyncio as _asyncio
-    from image_uploader import list_drive_folders
+    from image_uploader import list_drive_folders, FOLDER_MAP
+    folders = []
     try:
         folders = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, None),
-            timeout=20.0
+            _asyncio.get_running_loop().run_in_executor(None, list_drive_folders, None),
+            timeout=8.0
         )
     except Exception as e:
-        folders = []
         logger.error(f"Drive folder list error: {e}")
 
+    # Drive取得失敗時はFOLDER_MAPで代替
     if not folders:
-        await query.edit_message_text(
-            "❌ フォルダ取得に失敗しました。Drive認証を確認してください。",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")
-            ]])
-        )
-        return
+        folders = [{"id": fid, "name": name} for name, fid in FOLDER_MAP.items() if fid]
+        if not folders:
+            await query.edit_message_text(
+                "❌ フォルダ取得に失敗しました。Drive認証を確認してください。",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")
+                ]])
+            )
+            return
 
     keyboard = []
     row = []
@@ -404,8 +407,8 @@ async def handle_dl_cat_callback(update: Update, context: ContextTypes.DEFAULT_T
     # サブフォルダ確認
     try:
         subfolders = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, folder_id),
-            timeout=15.0
+            _asyncio.get_running_loop().run_in_executor(None, list_drive_folders, folder_id),
+            timeout=8.0
         )
     except Exception:
         subfolders = []

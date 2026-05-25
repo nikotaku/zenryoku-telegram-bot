@@ -55,6 +55,9 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 def _get_drive_service():
+    import httplib2
+    http = httplib2.Http(timeout=10)
+
     # まずサービスアカウントJSONを試す（サーバー環境推奨）
     sa_json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     if sa_json_str:
@@ -65,7 +68,8 @@ def _get_drive_service():
             creds = service_account.Credentials.from_service_account_info(
                 sa_info, scopes=["https://www.googleapis.com/auth/drive"]
             )
-            return build("drive", "v3", credentials=creds, cache_discovery=False)
+            authed_http = creds.authorize(http)
+            return build("drive", "v3", http=authed_http, cache_discovery=False)
         except Exception as e:
             logger.error(f"サービスアカウント認証エラー: {e}")
 
@@ -85,7 +89,8 @@ def _get_drive_service():
             else:
                 logger.error("token.json の認証情報が無効です。再認証が必要です。")
                 return None
-        return build("drive", "v3", credentials=creds, cache_discovery=False)
+        authed_http = creds.authorize(http)
+        return build("drive", "v3", http=authed_http, cache_discovery=False)
     except Exception as e:
         logger.error(f"Google Drive API 初期化エラー: {e}")
         return None
