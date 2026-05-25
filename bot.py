@@ -330,84 +330,106 @@ async def handle_img_up_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.reply_text("📷 アップロードしたい画像を送信してください。送信後、保存先のセラピストを選択できます。")
 
 async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """画像DL: Driveルートフォルダを動的取得して表示"""
     query = update.callback_query
     await query.answer()
-    
-    # Get folder names from Drive mapping
-    from image_uploader import FOLDER_MAP
-    folder_names = list(FOLDER_MAP.keys())
-    
-    # Categorize into "Therapists" and "Others"
-    non_therapists = ['衛生・清掃管理', '室内設備・備品', '店舗情報・メニュー', 'その他・宣伝素材', '店舗別バナー、ロゴ', '共通バナー', '店舗用❶', '聡電舎❷']
-    therapists = [n for n in folder_names if n not in non_therapists and n and "dummy" not in n.lower() and "セラピスト" not in n]
-    others = [n for n in folder_names if n in non_therapists]
-    
-    # Let user choose category first to avoid huge keyboards
-    keyboard = [
-        [InlineKeyboardButton("👧 セラピスト一覧", callback_data="dl_cat:therapists")],
-        [InlineKeyboardButton("📁 その他フォルダ", callback_data="dl_cat:others")],
-        [InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")],
-    ]
-    
-    await query.edit_message_text(
-        "⬇️ 【画像ダウンロード】\n画像を取得したいセラピストを選択してください。（最新5枚）",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text("⏳ Driveフォルダを取得中...")
 
+    import asyncio as _asyncio
+    from image_uploader import list_drive_folders
+    try:
+        folders = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, None),
+            timeout=20.0
+        )
+    except Exception as e:
+        folders = []
+        logger.error(f"Drive folder list error: {e}")
 
-async def handle_dl_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data.replace("dl_cat:", "")
-    from image_uploader import FOLDER_MAP
-    folder_names = list(FOLDER_MAP.keys())
-    non_therapists = ['衛生・清掃管理', '室内設備・備品', '店舗情報・メニュー', 'その他・宣伝素材', '店舗別バナー、ロゴ', '共通バナー', '店舗用❶', '聡電舎❷']
-    
-    if data == "therapists":
-        items = sorted([n for n in folder_names if n not in non_therapists and n and "dummy" not in n.lower() and "セラピスト" not in n])
-        title = "👧 セラピスト一覧"
-    else:
-        items = sorted([n for n in folder_names if n in non_therapists])
-        title = "📁 その他フォルダ"
-        
+    if not folders:
+        await query.edit_message_text(
+            "❌ フォルダ取得に失敗しました。Drive認証を確認してください。",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")
+            ]])
+        )
+        return
+
     keyboard = []
     row = []
-    for name in items:
-        # shorten name if needed but usually okay
-        row.append(InlineKeyboardButton(name[:15], callback_data=f"dl_therapist:{name}"))
+    for f in folders:
+        row.append(InlineKeyboardButton(
+            f["name"][:14],
+            callback_data=f"dl_cat:{f['id']}:{f['name'][:12]}"
+        ))
         if len(row) == 3:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🔙 戻る", callback_data="img_dl")])
-    
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
+
     await query.edit_message_text(
-        f"{title}\n画像を取得したい対象を選択してください。（最新5枚）",
+        "⬇️ 【画像ダウンロード】\nフォルダを選択してください：",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+async def handle_dl_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """フォルダを開く: サブフォルダがあれば一覧、なければ画像を全件送信"""
     query = update.callback_query
     await query.answer()
 
-    data = query.data.replace("dl_therapist:", "")
-    if data == "cancel":
-        await query.edit_message_text("❌ ダウンロードをキャンセルしました。")
-        return
+    parts = query.data.replace("dl_cat:", "").split(":", 1)
+    folder_id = parts[0]
+    folder_name = parts[1] if len(parts) > 1 else folder_id
 
-    await query.edit_message_text(f"⏳ {data}の画像を取得中...")
+    await query.edit_message_text(f"⏳ {folder_name} を確認中...")
 
     import asyncio as _asyncio
-    from image_uploader import get_image_list_from_drive, download_image_from_drive
+    from image_uploader import list_drive_folders, get_image_list_by_folder_id, download_image_from_drive
+
+    # サブフォルダ確認
+    try:
+        subfolders = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, folder_id),
+            timeout=15.0
+        )
+    except Exception:
+        subfolders = []
+
+    if subfolders:
+        keyboard = []
+        row = []
+        for f in subfolders:
+            row.append(InlineKeyboardButton(
+                f["name"][:14],
+                callback_data=f"dl_cat:{f['id']}:{f['name'][:12]}"
+            ))
+            if len(row) == 3:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([
+            InlineKeyboardButton("🔙 戻る", callback_data="img_dl"),
+            InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel"),
+        ])
+        await query.edit_message_text(
+            f"📁 {folder_name}\nフォルダを選択してください：",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    # 画像を直接送信
+    await query.edit_message_text(f"⏳ {folder_name}の画像を取得中...")
     try:
         files = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, get_image_list_from_drive, data, 50),
+            _asyncio.get_event_loop().run_in_executor(None, get_image_list_by_folder_id, folder_id, 50),
             timeout=30.0
         )
     except _asyncio.TimeoutError:
-        await query.edit_message_text("❌ タイムアウト（30秒）。Drive認証またはフォルダ共有を確認してください。")
+        await query.edit_message_text("❌ タイムアウト（30秒）。")
         return
     except Exception as e:
         await query.edit_message_text(f"❌ 取得エラー: {str(e)[:200]}")
@@ -415,13 +437,13 @@ async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEF
 
     if not files:
         await query.edit_message_text(
-            f"❌ {data}の画像が見つかりませんでした。\n\n"
-            f"・Driveフォルダがサービスアカウントに未共有\n"
-            f"・フォルダに画像がない"
+            f"❌ {folder_name}に画像がありません。\n\n"
+            "・Driveフォルダがサービスアカウントに未共有\n"
+            "・フォルダに画像がない"
         )
         return
 
-    await query.edit_message_text(f"⏳ {data}の画像 {len(files)}枚を送信中...")
+    await query.edit_message_text(f"⏳ {folder_name}の画像 {len(files)}枚を送信中...")
 
     success = 0
     for f in files:
@@ -441,9 +463,17 @@ async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEF
             logger.error(f"DL error {f['id']}: {e}")
 
     if success:
-        await query.message.reply_text(f"✅ {data}の画像 {success}枚を送信しました。")
+        await query.message.reply_text(f"✅ {folder_name}の画像 {success}枚を送信しました。")
     else:
         await query.message.reply_text("❌ 画像の送信に失敗しました。")
+
+
+async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """dl_therapist:cancel のみ処理（旧互換）"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("❌ ダウンロードをキャンセルしました。")
+
 
 async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """セラピスト選択コールバック — 画像をNotionに保存"""
