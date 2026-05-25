@@ -153,10 +153,8 @@ EXPENSE_DATE, EXPENSE_AMOUNT, EXPENSE_CONTENT, EXPENSE_MEMO = range(4)
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📲 ブログ一斉投稿")],
-        [KeyboardButton("🔔 イマスグ情報"), KeyboardButton("💼 出稼ぎスケジュール登録")],
-        [KeyboardButton("📰 ニュース生成"), KeyboardButton("📸 画像管理")],
-        [KeyboardButton("💴 経費を入力"), KeyboardButton("📓 写メ日記")],
-        [KeyboardButton("✍️ SEO記事作成")],
+        [KeyboardButton("💼 出稼ぎスケジュール登録")],
+        [KeyboardButton("📸 画像管理"), KeyboardButton("💴 経費を入力")],
         [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
         [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
         [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
@@ -199,12 +197,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "　自然言語でシフト登録・同期操作（例: 『明日りおんをキャスカンに登録』）\n\n"
         "💰 仮想通貨\n"
         "　bitbankの保有資産を確認\n\n"
-        "📰 ニュース生成 / ✍️ SEO記事作成\n"
-        "　エスたま向けの投稿文面・記事をAI生成\n\n"
         "💴 経費を入力\n"
         "　Googleスプレッドシートに経費を記録\n\n"
-        "📓 写メ日記 / 📸 画像管理\n"
-        "　テンプレート表示・セラピスト写真をNotionに保存",
+        "📸 画像管理\n"
+        "　セラピスト写真をGoogle Driveに保存・取得",
         reply_markup=MENU_KEYBOARD,
     )
 
@@ -2820,18 +2816,6 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """ボタン以外のテキストメッセージ — Gemini LLMで解析して適切な操作を実行"""
     text = update.message.text.strip() if update.message.text else ""
 
-    # SEOキーワード入力待ちの場合（専用フローを優先）
-    if context.user_data.get("seo_awaiting_keyword"):
-        handled = await handle_seo_keyword_input(update, context)
-        if handled:
-            return
-
-    # ニューストピック待ちの場合（専用フローを優先）
-    if context.user_data.get("awaiting_news_topic"):
-        handled = await handle_news_topic(update, context)
-        if handled:
-            return
-
     # AIシフト操作
     if context.user_data.get("ai_shift_awaiting"):
         handled = await handle_ai_shift_text(update, context)
@@ -2993,7 +2977,6 @@ def main() -> None:
     )
     app.add_handler(guest_conv)
     
-    app.add_handler(MessageHandler(filters.Regex(r"^🔔 イマスグ情報$"), handle_imasugu))
     app.add_handler(CallbackQueryHandler(ai_exec_callback, pattern="^ai_exec:"))
     
 
@@ -3049,7 +3032,6 @@ def main() -> None:
 
     # メニューボタン — テキストメッセージ
     app.add_handler(MessageHandler(filters.Regex(r"^📸 画像管理$"), handle_images))
-    app.add_handler(MessageHandler(filters.Regex(r"^📓 写メ日記$"), handle_photo_diary))
     app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
     app.add_handler(CommandHandler("shiftdb", handle_shift_db_menu))
@@ -3072,7 +3054,6 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
     app.add_handler(CallbackQueryHandler(handle_diary_back_callback, pattern=r"^diary:back$"))
-    app.add_handler(CallbackQueryHandler(handle_seo_callback, pattern=r"^seo:"))
     app.add_handler(CallbackQueryHandler(handle_crypto_callback, pattern=r"^crypto:"))
     app.add_handler(CallbackQueryHandler(handle_agent_callback, pattern=r"^agent:"))
     app.add_handler(CallbackQueryHandler(handle_agent_confirm_callback, pattern=r"^agent_confirm:"))
@@ -3087,9 +3068,7 @@ def main() -> None:
     async def post_init(application: Application) -> None:
         await application.bot.set_my_commands([
             BotCommand("start", "メインメニューを表示"),
-            BotCommand("news", "ニュース投稿文面を生成"),
             BotCommand("images", "画像管理"),
-            BotCommand("seo", "SEO記事ドラフトを生成"),
             BotCommand("agent", "AIブラウザエージェント"),
             BotCommand("shiftdb", "シフトDB（Notionマスタ同期）"),
         ])
