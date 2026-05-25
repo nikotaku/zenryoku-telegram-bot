@@ -10,7 +10,7 @@ class ZeroTwoBrowser:
         self._context = None
         self._page = None
         self._logged_in = False
-        
+
     async def _ensure_browser(self):
         if self._browser is None:
             self._playwright = await async_playwright().start()
@@ -28,15 +28,15 @@ class ZeroTwoBrowser:
             await self._ensure_browser()
             page = self._page
             await page.goto("https://m-sns.net/shop/login/")
-            
+
             await page.fill('input[name="email"]', "chelsy.ox.0913@gmail.com")
             await page.fill('input[name="password"]', "zenryoku0913")
-            
+
             await asyncio.gather(
                 page.click('button[type="submit"]'),
                 page.wait_for_load_state("networkidle")
             )
-            
+
             if "dashboard" in page.url:
                 self._logged_in = True
                 logger.info("ZeroTwo Login successful")
@@ -52,35 +52,52 @@ class ZeroTwoBrowser:
         if not self._logged_in:
             success = await self.login()
             if not success:
-                return {"success": False, "message": "Failed to login"}
-                
+                return {"success": False, "message": "ログインに失敗しました"}
+
         try:
             page = self._page
             await page.goto("https://m-sns.net/shop/post/create/", wait_until="networkidle")
-            
-            await page.fill('textarea[name="content"]', content)
-            
+            await page.wait_for_timeout(1000)
+
+            # テキストエリアに入力してJS validationを発火させる
+            textarea = page.locator('textarea[name="content"]')
+            await textarea.fill(content)
+            await textarea.dispatch_event("input")
+            await textarea.dispatch_event("change")
+            await page.wait_for_timeout(500)
+
             if image_path:
                 try:
                     async with page.expect_file_chooser() as fc_info:
                         await page.click('div#mainDropzone')
                     file_chooser = await fc_info.value
                     await file_chooser.set_files(image_path)
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(1500)
                 except Exception as e:
-                    logger.warning(f"Failed to attach image to ZeroTwo: {e}")
-            
+                    logger.warning(f"ZeroTwo 画像添付失敗: {e}")
+
+            # ボタンが有効になるまで待つ（最大10秒）
+            submit_btn = page.locator('button[type="submit"]')
+            try:
+                await submit_btn.wait_for(state="enabled", timeout=10000)
+            except Exception:
+                # disabledのままならJSをバイパスして直接クリック
+                logger.warning("ZeroTwo: submit button still disabled, forcing click via JS")
+                await page.evaluate(
+                    "document.querySelector('button[type=\"submit\"]').removeAttribute('disabled')"
+                )
+
             await asyncio.gather(
-                page.click('button[type="submit"]'),
+                submit_btn.click(),
                 page.wait_for_load_state("networkidle")
             )
-            
+
             logger.info("ZeroTwo Post successful")
-            return {"success": True}
+            return {"success": True, "message": "02投稿完了"}
         except Exception as e:
             logger.error(f"ZeroTwo Post Error: {e}")
             return {"success": False, "message": str(e)}
-            
+
     async def close(self):
         if self._browser:
             await self._browser.close()

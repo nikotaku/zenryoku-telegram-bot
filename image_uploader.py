@@ -148,6 +148,42 @@ async def upload_telegram_photo(bot, file_id: str, therapist_name: str = "") -> 
         return None
 
 
+def list_drive_folders(parent_folder_id: str = None) -> list:
+    """指定フォルダ直下のサブフォルダを動的取得。parent_folder_id省略時はルート。"""
+    service = _get_drive_service()
+    if not service:
+        return []
+    folder_id = parent_folder_id or ROOT_FOLDER_ID
+    try:
+        query = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false"
+        results = service.files().list(
+            q=query, fields="files(id, name)", orderBy="name"
+        ).execute()
+        return results.get('files', [])
+    except Exception as e:
+        logger.error(f"Error listing folders in {folder_id}: {e}")
+        return []
+
+
+def get_image_list_by_folder_id(folder_id: str, limit: int = 20) -> list:
+    """フォルダIDで直接画像一覧取得（サブフォルダ含む）。"""
+    service = _get_drive_service()
+    if not service:
+        return []
+    try:
+        folder_ids = _get_all_subfolders(service, folder_id)
+        parent_queries = [f"'{fid}' in parents" for fid in folder_ids]
+        query = "(" + " or ".join(parent_queries) + ") and mimeType contains 'image/' and trashed=false"
+        results = service.files().list(
+            q=query, orderBy="createdTime desc", pageSize=limit,
+            fields="files(id, name, createdTime)"
+        ).execute()
+        return results.get('files', [])
+    except Exception as e:
+        logger.error(f"Error listing images in folder {folder_id}: {e}")
+        return []
+
+
 def _get_all_subfolders(service, folder_id):
     subfolders = [folder_id]
     query = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false"
