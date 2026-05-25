@@ -3320,6 +3320,11 @@ def main() -> None:
             BotCommand("shiftdb", "シフトDB（Notionマスタ同期）"),
         ])
         logger.info("Telegramコマンドメニューを更新しました")
+        # Drive フォルダ構成をバックグラウンドで先読み
+        import asyncio
+        loop = asyncio.get_event_loop()
+        from image_uploader import warm_drive_cache
+        loop.run_in_executor(None, warm_drive_cache)
 
     if RION_ENABLED:
         async def post_init_with_rion(application):

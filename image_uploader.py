@@ -148,28 +148,60 @@ async def upload_telegram_photo(bot, file_id: str, therapist_name: str = "") -> 
         return None
 
 
+# ─── Drive フォルダキャッシュ ────────────────────────────────────────
+import time as _time
+
+_folder_cache: dict[str, tuple[list, float]] = {}  # folder_id → (folders, fetched_at)
+_image_cache:  dict[str, tuple[list, float]] = {}  # folder_id → (files, fetched_at)
+FOLDER_CACHE_TTL = 3600  # 1時間
+IMAGE_CACHE_TTL  = 300   # 5分
+
+
 def list_drive_folders(parent_folder_id: str = None) -> list:
-    """指定フォルダ直下のサブフォルダを動的取得。parent_folder_id省略時はルート。"""
+    """指定フォルダ直下のサブフォルダを取得（1時間キャッシュ）。"""
+    folder_id = parent_folder_id or ROOT_FOLDER_ID
+    cached, ts = _folder_cache.get(folder_id, (None, 0))
+    if cached is not None and _time.time() - ts < FOLDER_CACHE_TTL:
+        return cached
+
     service = _get_drive_service()
     if not service:
-        return []
-    folder_id = parent_folder_id or ROOT_FOLDER_ID
+        return cached or []
     try:
         query = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed=false"
         results = service.files().list(
             q=query, fields="files(id, name)", orderBy="name"
         ).execute()
-        return results.get('files', [])
+        folders = results.get('files', [])
+        _folder_cache[folder_id] = (folders, _time.time())
+        return folders
     except Exception as e:
         logger.error(f"Error listing folders in {folder_id}: {e}")
-        return []
+        return cached or []
+
+
+def warm_drive_cache():
+    """起動時にルートフォルダ構成を先読みしてキャッシュに入れる。"""
+    try:
+        root_folders = list_drive_folders(None)
+        logger.info(f"Drive キャッシュ準備完了: ルート {len(root_folders)}フォルダ")
+        for f in root_folders:
+            list_drive_folders(f["id"])
+        logger.info("Drive サブフォルダもキャッシュ完了")
+    except Exception as e:
+        logger.error(f"Drive warm cache error: {e}")
 
 
 def get_image_list_by_folder_id(folder_id: str, limit: int = 20) -> list:
-    """フォルダIDで直接画像一覧取得（サブフォルダ含む）。"""
+    """フォルダIDで直接画像一覧取得（サブフォルダ含む、5分キャッシュ）。"""
+    cache_key = f"{folder_id}:{limit}"
+    cached, ts = _image_cache.get(cache_key, (None, 0))
+    if cached is not None and _time.time() - ts < IMAGE_CACHE_TTL:
+        return cached
+
     service = _get_drive_service()
     if not service:
-        return []
+        return cached or []
     try:
         folder_ids = _get_all_subfolders(service, folder_id)
         parent_queries = [f"'{fid}' in parents" for fid in folder_ids]
@@ -178,10 +210,12 @@ def get_image_list_by_folder_id(folder_id: str, limit: int = 20) -> list:
             q=query, orderBy="createdTime desc", pageSize=limit,
             fields="files(id, name, createdTime)"
         ).execute()
-        return results.get('files', [])
+        files = results.get('files', [])
+        _image_cache[cache_key] = (files, _time.time())
+        return files
     except Exception as e:
         logger.error(f"Error listing images in folder {folder_id}: {e}")
-        return []
+        return cached or []
 
 
 def _get_all_subfolders(service, folder_id):
