@@ -359,3 +359,67 @@ class EstamaClient:
         except Exception as e:
             logger.error(f"ニュース取得エラー: {e}")
             return []
+
+    def post_diary(self, title: str, body: str, image_bytes: bytes = b"") -> dict:
+        """写メ日記（ブログ）をrequestsで投稿する"""
+        if not self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました"}
+
+        try:
+            # ブログ編集ページを取得してフォーム情報を解析
+            resp = self.session.get(f"{ADMIN_URL}/blog_edit/", timeout=15)
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            csrf_input = soup.find("input", {"id": "csrf_footer"})
+            csrf_token = csrf_input["value"] if csrf_input else self._csrf_token
+
+            form = soup.find("form")
+            if not form:
+                return {"success": False, "message": "投稿フォームが見つかりません"}
+
+            action = form.get("action", f"{ADMIN_URL}/blog_edit/")
+            if not action.startswith("http"):
+                action = f"{BASE_URL}{action.lstrip('/')}" if action.startswith("/") else f"{ADMIN_URL}/{action}"
+
+            # 既存フォームフィールドを収集
+            form_data = {}
+            for inp in form.find_all(["input", "textarea", "select"]):
+                name = inp.get("name")
+                if not name or inp.get("type") in ("submit", "file"):
+                    continue
+                form_data[name] = inp.get("value", inp.string or "")
+
+            # タイトル・本文フィールドを名前パターンで上書き
+            for key in list(form_data.keys()):
+                kl = key.lower()
+                if "title" in kl or "subject" in kl:
+                    form_data[key] = title
+                elif any(w in kl for w in ("body", "content", "text", "comment", "diary")):
+                    form_data[key] = body
+
+            form_data["ctk"] = csrf_token
+
+            files = {}
+            if image_bytes:
+                files["image"] = ("photo.jpg", image_bytes, "image/jpeg")
+
+            if files:
+                post_resp = self.session.post(
+                    action, data=form_data, files=files,
+                    headers={"Referer": f"{ADMIN_URL}/blog_edit/"},
+                    timeout=30
+                )
+            else:
+                post_resp = self.session.post(
+                    action, data=form_data,
+                    headers={"Referer": f"{ADMIN_URL}/blog_edit/"},
+                    timeout=30
+                )
+
+            if post_resp.status_code in (200, 302):
+                return {"success": True, "message": "エスたま投稿完了"}
+            return {"success": False, "message": f"投稿失敗: HTTP {post_resp.status_code}"}
+
+        except Exception as e:
+            logger.error(f"エスたまブログ投稿エラー: {e}")
+            return {"success": False, "message": str(e)}

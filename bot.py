@@ -709,18 +709,38 @@ async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data["post_body"] = text
     title = context.user_data["post_title"]
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👧 セラピスト", callback_data="post_dl_cat:therapists"),
-         InlineKeyboardButton("📁 その他フォルダ", callback_data="post_dl_cat:others")],
-        [InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")],
-        [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")],
-    ])
+    # Drive トップフォルダを動的取得
+    import asyncio as _asyncio
+    from image_uploader import list_drive_folders
+    try:
+        folders = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, None),
+            timeout=20.0
+        )
+    except Exception:
+        folders = []
+
+    rows = []
+    row = []
+    for f in folders:
+        row.append(InlineKeyboardButton(
+            f["name"][:14],
+            callback_data=f"post_dl_folder:{f['id']}:{f['name'][:10]}"
+        ))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")])
+    rows.append([InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")])
+
     await update.message.reply_text(
         f"✅ 本文を設定しました。\n\n"
         f"【タイトル】{title}\n"
         f"【本文】{text[:100]}{'...' if len(text) > 100 else ''}\n\n"
-        "📁 Driveフォルダから画像を選ぶか、写真を直接送ってください：",
-        reply_markup=keyboard
+        "📁 Driveフォルダを選ぶか、写真を直接送ってください：",
+        reply_markup=InlineKeyboardMarkup(rows)
     )
     return POST_PHOTO
 
@@ -741,15 +761,15 @@ async def _execute_post(title: str, body: str, image_bytes: bytes | None, send_m
         except: pass
 
     try:
-        from estama_browser import EstamaBrowser
-        estama = EstamaBrowser()
-        r = await estama.post_diary(therapist_name="", title=title, body=body, image_bytes=image_bytes or b"")
+        import asyncio as _asyncio
+        from estama_client import EstamaClient
+        estama = EstamaClient()
+        r = await _asyncio.get_event_loop().run_in_executor(
+            None, estama.post_diary, title, body, image_bytes or b""
+        )
         results.append(f"{'✅' if r.get('success') else '❌'} エスたま: {r.get('message','')}")
     except Exception as e:
         results.append(f"❌ エスたま: {str(e)[:80]}")
-    finally:
-        try: await estama.close()
-        except: pass
 
     try:
         import tempfile, os as _os
@@ -783,70 +803,113 @@ async def _execute_post(title: str, body: str, image_bytes: bytes | None, send_m
     return result_text
 
 
-async def post_drive_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Drive カテゴリ選択 (セラピスト/その他)"""
-    query = update.callback_query
-    await query.answer()
-    data = query.data.replace("post_dl_cat:", "")
-
-    if data == "back":
-        # 本文入力後の画像選択画面に戻る
-        title = context.user_data.get("post_title", "")
-        body = context.user_data.get("post_body", "")
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👧 セラピスト", callback_data="post_dl_cat:therapists"),
-             InlineKeyboardButton("📁 その他フォルダ", callback_data="post_dl_cat:others")],
-            [InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")],
-            [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")],
-        ])
-        await query.edit_message_text(
-            f"【タイトル】{title}\n【本文】{body[:80]}{'...' if len(body) > 80 else ''}\n\n"
-            "📁 Driveフォルダから画像を選ぶか、写真を直接送ってください：",
-            reply_markup=keyboard
+async def _post_show_drive_top(query, title: str, body: str):
+    """Drive トップフォルダ一覧をボタン表示（動的取得）"""
+    import asyncio as _asyncio
+    from image_uploader import list_drive_folders
+    try:
+        folders = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, None),
+            timeout=20.0
         )
-        return POST_PHOTO
-
-    from image_uploader import FOLDER_MAP
-    folder_names = list(FOLDER_MAP.keys())
-    non_therapists = ["セラピスト", "ダミー用画像", "店舗別バナー、ロゴ", "共通バナー", "店舗用❶", "聡電舎❷"]
-
-    if data == "therapists":
-        items = sorted([n for n in folder_names if n not in non_therapists])
-        title = "👧 セラピストを選択："
-    else:
-        items = sorted([n for n in folder_names if n in non_therapists])
-        title = "📁 フォルダを選択："
+    except Exception:
+        folders = []
 
     keyboard = []
     row = []
-    for name in items:
-        row.append(InlineKeyboardButton(name[:12], callback_data=f"post_dl_folder:{name}"))
+    for f in folders:
+        # フォルダIDをcallback_dataに埋め込む（"post_dl_folder:{id}:{name}"）
+        row.append(InlineKeyboardButton(
+            f["name"][:14],
+            callback_data=f"post_dl_folder:{f['id']}:{f['name'][:10]}"
+        ))
         if len(row) == 3:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([
-        InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back"),
-        InlineKeyboardButton("📤 スキップ", callback_data="post_photo:skip"),
-    ])
-    await query.edit_message_text(title, reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard.append([InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")])
+    keyboard.append([InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")])
+
+    text = (
+        f"【タイトル】{title}\n"
+        f"【本文】{body[:80]}{'...' if len(body) > 80 else ''}\n\n"
+        "📁 Driveフォルダを選択してください："
+    )
+    if folders:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await query.edit_message_text(
+            text + "\n\n⚠️ フォルダ取得失敗。写真を直接送るか画像なしで投稿してください。",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")],
+                [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")],
+            ])
+        )
+
+
+async def post_drive_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Drive カテゴリ選択（後方互換）→ トップフォルダ一覧表示に統合"""
+    query = update.callback_query
+    await query.answer()
+    title = context.user_data.get("post_title", "")
+    body = context.user_data.get("post_body", "")
+    await _post_show_drive_top(query, title, body)
     return POST_PHOTO
 
 
 async def post_drive_folder_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Drive フォルダ内の画像一覧を表示"""
+    """Drive フォルダ内を表示：サブフォルダがあればフォルダ一覧、なければ画像一覧"""
     query = update.callback_query
     await query.answer()
-    folder_name = query.data.replace("post_dl_folder:", "")
 
-    await query.edit_message_text(f"⏳ {folder_name}の画像一覧を取得中...")
+    # callback_data: "post_dl_folder:{folder_id}:{folder_name}"
+    parts = query.data.replace("post_dl_folder:", "").split(":", 1)
+    folder_id = parts[0]
+    folder_name = parts[1] if len(parts) > 1 else folder_id
+
+    await query.edit_message_text(f"⏳ {folder_name} を確認中...")
 
     import asyncio as _asyncio
-    from image_uploader import get_image_list_from_drive
+    from image_uploader import list_drive_folders, get_image_list_by_folder_id
+
+    # サブフォルダを確認
+    try:
+        subfolders = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, list_drive_folders, folder_id),
+            timeout=20.0
+        )
+    except Exception:
+        subfolders = []
+
+    if subfolders:
+        # サブフォルダ一覧を表示
+        keyboard = []
+        row = []
+        for f in subfolders:
+            row.append(InlineKeyboardButton(
+                f["name"][:14],
+                callback_data=f"post_dl_folder:{f['id']}:{f['name'][:10]}"
+            ))
+            if len(row) == 3:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([
+            InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back"),
+            InlineKeyboardButton("📤 スキップ", callback_data="post_photo:skip"),
+        ])
+        await query.edit_message_text(
+            f"📁 {folder_name}\nフォルダを選択してください：",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return POST_PHOTO
+
+    # 画像一覧を表示
     try:
         files = await _asyncio.wait_for(
-            _asyncio.get_event_loop().run_in_executor(None, get_image_list_from_drive, folder_name, 20),
+            _asyncio.get_event_loop().run_in_executor(None, get_image_list_by_folder_id, folder_id, 20),
             timeout=30.0
         )
     except _asyncio.TimeoutError:
@@ -868,8 +931,10 @@ async def post_drive_folder_callback(update: Update, context: ContextTypes.DEFAU
     keyboard = []
     row = []
     for f in files[:18]:
-        name = f["name"][:16]
-        row.append(InlineKeyboardButton(name, callback_data=f"post_dl_img:{f['id']}"))
+        row.append(InlineKeyboardButton(
+            f["name"][:16],
+            callback_data=f"post_dl_img:{f['id']}"
+        ))
         if len(row) == 2:
             keyboard.append(row)
             row = []
