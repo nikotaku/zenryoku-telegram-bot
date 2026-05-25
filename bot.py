@@ -88,6 +88,17 @@ except ImportError as e:
 
 # ─── ブログ一斉投稿 ConversationHandler ステート ────────────────
 POST_NAME, POST_TEMPLATE, POST_TITLE, POST_BODY, POST_PHOTO = range(20, 25)
+POST_TITLE_FREE = 25  # 自由入力タイトル待ち
+
+# タイトルプリセット
+POST_TITLE_PRESETS = [
+    "本日の出勤情報",
+    "お礼日記",
+    "お知らせ",
+    "キャンペーン情報",
+    "新人セラピスト紹介",
+    "スタッフ日記",
+]
 
 # ─── 出稼ぎスケジュール登録 ConversationHandler ステート ────────────────
 GUEST_NAME, GUEST_START_DATE, GUEST_END_DATE, GUEST_START_TIME, GUEST_END_TIME, GUEST_EXPENSE, GUEST_X_ACCOUNT = range(10, 17)
@@ -643,149 +654,159 @@ async def handle_diary_back_callback(update: Update, context: ContextTypes.DEFAU
 # ─── ブログ一斉投稿ハンドラー ─────────────────────────────────────
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    
-    therapists = get_therapist_list()
+
     keyboard = []
-    row = []
-    for name in therapists:
-        row.append(InlineKeyboardButton(name, callback_data=f"post_name:{name}"))
-        if len(row) == 3:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="post_name:cancel")])
-    
+    for preset in POST_TITLE_PRESETS:
+        keyboard.append([InlineKeyboardButton(preset, callback_data=f"post_title:{preset}")])
+    keyboard.append([InlineKeyboardButton("✏️ 自由入力", callback_data="post_title:__free__")])
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="post_title:__cancel__")])
+
     await update.message.reply_text(
         "📲 【ブログ一斉投稿】\n\n"
-        "各SNSやブログへ一斉に投稿します。\n"
-        "投稿するセラピストを選択してください：",
+        "HP・エスたま・02に一斉投稿します。\n\n"
+        "【タイトル】を選択してください：",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return POST_NAME
 
+
 async def post_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """タイトル選択コールバック"""
     query = update.callback_query
     await query.answer()
-    
-    if not query.data.startswith("post_name:"):
-        return POST_NAME
-        
-    name = query.data.replace("post_name:", "")
-    if name == "cancel":
+
+    data = query.data.replace("post_title:", "")
+    if data == "__cancel__":
         await query.edit_message_text("❌ 一斉投稿をキャンセルしました。")
         return ConversationHandler.END
-        
-    context.user_data["post_name"] = name
-    
-    # テンプレート選択
-    keyboard = []
-    for template in PHOTO_DIARY_TEMPLATES:
-        keyboard.append([InlineKeyboardButton(template["title"], callback_data=f"post_tmpl:{template['id']}")])
-    keyboard.append([InlineKeyboardButton("✏️ 手動で入力する", callback_data="post_tmpl:manual")])
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="post_tmpl:cancel")])
-    
-    await query.edit_message_text(
-        f"✅ 選択: {name}\n\n"
-        "次に、投稿する【文章の雛形（テンプレート）】を選択してください：",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return POST_TEMPLATE
 
-async def post_template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data.replace("post_tmpl:", "")
-    if data == "cancel":
-        await query.edit_message_text("❌ 一斉投稿をキャンセルしました。")
-        return ConversationHandler.END
-        
-    if data == "manual":
-        context.user_data["post_is_manual"] = True
-        await query.edit_message_text("✏️ 手動入力を選択しました。\nまずは【タイトル】をチャットに入力してください：")
-        return POST_TITLE
-        
-    # テンプレート自動適用
-    template = next((t for t in PHOTO_DIARY_TEMPLATES if str(t["id"]) == data), None)
-    if not template:
-        await query.edit_message_text("⚠️ エラー: テンプレートが見つかりません。")
-        return ConversationHandler.END
-        
-    name = context.user_data["post_name"]
-    title = template["short"].replace("○○", name)
-    body = template["text"].replace("○○", name)
-    
-    # 140文字制限対応の短縮テキストも作成しておく（今回は全て共通設定だが将来のため）
-    # ※ユーザーの希望により共通文章を使用
-    context.user_data["post_title"] = title
-    context.user_data["post_body"] = body
-    
-    await query.edit_message_text(
-        f"✅ テンプレートを適用しました！\n\n"
-        f"【タイトル】\n{title}\n\n"
-        f"【本文】\n{body}\n\n"
-        "📸 最後に、投稿する【画像】を送信してください！"
-    )
-    return POST_PHOTO
+    if data == "__free__":
+        await query.edit_message_text("✏️ タイトルを入力してください：")
+        return POST_TITLE_FREE
 
-async def post_title_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["post_title"] = data
+    await query.edit_message_text(
+        f"✅ タイトル：{data}\n\n【本文】を入力してください："
+    )
+    return POST_BODY
+
+
+async def post_title_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """自由入力タイトル受付"""
     text = update.message.text.strip()
     if text == "キャンセル":
         await update.message.reply_text("❌ 一斉投稿をキャンセルしました。", reply_markup=MENU_KEYBOARD)
         return ConversationHandler.END
-        
     context.user_data["post_title"] = text
-    await update.message.reply_text("✅ タイトルを設定しました。\n次に、【本文】（140文字以内）を入力してください：")
+    await update.message.reply_text(f"✅ タイトル：{text}\n\n【本文】を入力してください：")
     return POST_BODY
+
 
 async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     if text == "キャンセル":
         await update.message.reply_text("❌ 一斉投稿をキャンセルしました。", reply_markup=MENU_KEYBOARD)
         return ConversationHandler.END
-        
+
     context.user_data["post_body"] = text
-    
     title = context.user_data["post_title"]
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")]
+    ])
     await update.message.reply_text(
-        f"✅ 本文を設定しました！\n\n"
-        f"【タイトル】\n{title}\n\n"
-        f"【本文】\n{text}\n\n"
-        "📸 最後に、投稿する【画像】を送信してください！"
+        f"✅ 本文を設定しました。\n\n"
+        f"【タイトル】{title}\n"
+        f"【本文】{text}\n\n"
+        "📸 画像を添付するか「画像なしで投稿」を押してください：",
+        reply_markup=keyboard
     )
     return POST_PHOTO
 
+
 async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message.photo:
-        await update.message.reply_text("⚠️ 写真が添付されていません。写真を送信してください。")
-        return POST_PHOTO
-        
-    photo = update.message.photo[-1]
-    name = context.user_data["post_name"]
-    title = context.user_data["post_title"]
-    
-    await update.message.reply_text(f"⏳ {name}の「{title}」を一斉送信中...\nしばらくお待ちください。")
-    
-    # 画像のダウンロードとURL化
-    from image_uploader import upload_telegram_photo
-    image_url = await upload_telegram_photo(context.bot, photo.file_id, name)
-    
-    # TODO: 実際の各プラットフォームへの投稿プログラムを呼び出す
-    import asyncio
-    await asyncio.sleep(2)
-    
-    await update.message.reply_text(
-        f"✅ 【一斉送信 完了】\n\n"
-        f"👤 セラピスト: {name}\n"
-        f"🟢 エスたま: 送信成功 (準備中)\n"
-        f"🟢 キャスカン: 送信成功 (準備中)\n"
-        f"🟢 X(Twitter): 送信成功 (準備中)\n"
-        f"🟢 Bluesky: 送信成功 (準備中)\n\n"
-        f"（※実際のWebサイトへの自動入力プログラムは現在開発中です）",
+    title = context.user_data.get("post_title", "")
+    body = context.user_data.get("post_body", "")
+    image_bytes = None
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(f"⏳ 「{title}」を一斉投稿中...")
+        reply = update.callback_query.message.reply_text
+    else:
+        if not update.message.photo:
+            await update.message.reply_text("⚠️ 写真を送信するか「画像なしで投稿」を押してください。")
+            return POST_PHOTO
+        photo = update.message.photo[-1]
+        tg_file = await context.bot.get_file(photo.file_id)
+        import io, requests as _req
+        url = tg_file.file_path if tg_file.file_path.startswith("http") else f"https://api.telegram.org/file/bot{context.bot.token}/{tg_file.file_path}"
+        image_bytes = _req.get(url, timeout=30).content
+        await update.message.reply_text(f"⏳ 「{title}」を一斉投稿中...")
+        reply = update.message.reply_text
+
+    results = []
+
+    # ── HP（キャスカン）──
+    try:
+        from caskan_browser import CaskanBrowser
+        caskan = CaskanBrowser()
+        r = await caskan.post_news(title=title, body=body)
+        results.append(f"{'✅' if r.get('success') else '❌'} HP(キャスカン): {r.get('message','')}")
+    except Exception as e:
+        results.append(f"❌ HP(キャスカン): {str(e)[:80]}")
+    finally:
+        try: await caskan.close()
+        except: pass
+
+    # ── エスたま ──
+    try:
+        from estama_browser import EstamaBrowser
+        estama = EstamaBrowser()
+        r = await estama.post_diary(therapist_name="", title=title, body=body, image_bytes=image_bytes or b"")
+        results.append(f"{'✅' if r.get('success') else '❌'} エスたま: {r.get('message','')}")
+    except Exception as e:
+        results.append(f"❌ エスたま: {str(e)[:80]}")
+    finally:
+        try: await estama.close()
+        except: pass
+
+    # ── 02 ──
+    try:
+        from zerotwo_browser import ZeroTwoBrowser
+        import tempfile, os as _os
+        zerotwo = ZeroTwoBrowser()
+        image_path = None
+        if image_bytes:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+            tmp.write(image_bytes)
+            tmp.close()
+            image_path = tmp.name
+        full_content = f"【{title}】\n\n{body}"
+        r = await zerotwo.post_news(content=full_content, image_path=image_path)
+        results.append(f"{'✅' if r.get('success') else '❌'} 02: {r.get('message','')}")
+        if image_path:
+            try: _os.unlink(image_path)
+            except: pass
+    except Exception as e:
+        results.append(f"❌ 02: {str(e)[:80]}")
+    finally:
+        try: await zerotwo.close()
+        except: pass
+
+    result_text = "\n".join(results)
+    await reply(
+        f"📲 【一斉投稿 完了】\n\n"
+        f"タイトル: {title}\n\n"
+        f"{result_text}",
         reply_markup=MENU_KEYBOARD
     )
     return ConversationHandler.END
+
+
+async def post_photo_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """画像なしで投稿ボタン"""
+    return await post_photo(update, context)
 
 # ─── 出稼ぎスケジュール登録ハンドラー ─────────────────────────────────────
 async def guest_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2942,11 +2963,13 @@ def main() -> None:
     post_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(r"^📲 ブログ一斉投稿$"), post_start)],
         states={
-            POST_NAME: [CallbackQueryHandler(post_name_callback, pattern="^post_name:")],
-            POST_TEMPLATE: [CallbackQueryHandler(post_template_callback, pattern="^post_tmpl:")],
-            POST_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_title_text)],
-            POST_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_body_text)],
-            POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
+            POST_NAME:       [CallbackQueryHandler(post_name_callback, pattern="^post_title:")],
+            POST_TITLE_FREE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_title_free_text)],
+            POST_BODY:       [MessageHandler(filters.TEXT & ~filters.COMMAND, post_body_text)],
+            POST_PHOTO: [
+                MessageHandler(filters.PHOTO, post_photo),
+                CallbackQueryHandler(post_photo_skip, pattern="^post_photo:skip$"),
+            ],
         },
         fallbacks=[MessageHandler(filters.Regex(r"^❌ キャンセル$"), post_start)],
         per_message=False
