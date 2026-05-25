@@ -89,6 +89,8 @@ except ImportError as e:
 # ─── ブログ一斉投稿 ConversationHandler ステート ────────────────
 POST_NAME, POST_TEMPLATE, POST_TITLE, POST_BODY, POST_PHOTO = range(20, 25)
 POST_TITLE_FREE = 25  # 自由入力タイトル待ち
+POST_DRIVE_CAT = 26   # Drive カテゴリ選択待ち
+POST_DRIVE_FOLDER = 27  # Drive フォルダ内画像選択待ち
 
 # タイトルプリセット
 POST_TITLE_PRESETS = [
@@ -708,42 +710,25 @@ async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     title = context.user_data["post_title"]
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")]
+        [InlineKeyboardButton("👧 セラピスト", callback_data="post_dl_cat:therapists"),
+         InlineKeyboardButton("📁 その他フォルダ", callback_data="post_dl_cat:others")],
+        [InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")],
+        [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")],
     ])
     await update.message.reply_text(
         f"✅ 本文を設定しました。\n\n"
         f"【タイトル】{title}\n"
-        f"【本文】{text}\n\n"
-        "📸 画像を添付するか「画像なしで投稿」を押してください：",
+        f"【本文】{text[:100]}{'...' if len(text) > 100 else ''}\n\n"
+        "📁 Driveフォルダから画像を選ぶか、写真を直接送ってください：",
         reply_markup=keyboard
     )
     return POST_PHOTO
 
 
-async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    title = context.user_data.get("post_title", "")
-    body = context.user_data.get("post_body", "")
-    image_bytes = None
-
-    if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(f"⏳ 「{title}」を一斉投稿中...")
-        reply = update.callback_query.message.reply_text
-    else:
-        if not update.message.photo:
-            await update.message.reply_text("⚠️ 写真を送信するか「画像なしで投稿」を押してください。")
-            return POST_PHOTO
-        photo = update.message.photo[-1]
-        tg_file = await context.bot.get_file(photo.file_id)
-        import io, requests as _req
-        url = tg_file.file_path if tg_file.file_path.startswith("http") else f"https://api.telegram.org/file/bot{context.bot.token}/{tg_file.file_path}"
-        image_bytes = _req.get(url, timeout=30).content
-        await update.message.reply_text(f"⏳ 「{title}」を一斉投稿中...")
-        reply = update.message.reply_text
-
+async def _execute_post(title: str, body: str, image_bytes: bytes | None, send_msg) -> str:
+    """HP/エスたま/02に一斉投稿して結果テキストを返す"""
     results = []
 
-    # ── HP（キャスカン）──
     try:
         from caskan_browser import CaskanBrowser
         caskan = CaskanBrowser()
@@ -755,7 +740,6 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         try: await caskan.close()
         except: pass
 
-    # ── エスたま ──
     try:
         from estama_browser import EstamaBrowser
         estama = EstamaBrowser()
@@ -767,10 +751,9 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         try: await estama.close()
         except: pass
 
-    # ── 02 ──
     try:
-        from zerotwo_browser import ZeroTwoBrowser
         import tempfile, os as _os
+        from zerotwo_browser import ZeroTwoBrowser
         zerotwo = ZeroTwoBrowser()
         image_path = None
         if image_bytes:
@@ -791,12 +774,177 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except: pass
 
     result_text = "\n".join(results)
-    await reply(
+    await send_msg(
         f"📲 【一斉投稿 完了】\n\n"
         f"タイトル: {title}\n\n"
         f"{result_text}",
         reply_markup=MENU_KEYBOARD
     )
+    return result_text
+
+
+async def post_drive_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Drive カテゴリ選択 (セラピスト/その他)"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data.replace("post_dl_cat:", "")
+
+    if data == "back":
+        # 本文入力後の画像選択画面に戻る
+        title = context.user_data.get("post_title", "")
+        body = context.user_data.get("post_body", "")
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👧 セラピスト", callback_data="post_dl_cat:therapists"),
+             InlineKeyboardButton("📁 その他フォルダ", callback_data="post_dl_cat:others")],
+            [InlineKeyboardButton("📷 写真を直接送る", callback_data="post_photo:manual")],
+            [InlineKeyboardButton("📤 画像なしで投稿", callback_data="post_photo:skip")],
+        ])
+        await query.edit_message_text(
+            f"【タイトル】{title}\n【本文】{body[:80]}{'...' if len(body) > 80 else ''}\n\n"
+            "📁 Driveフォルダから画像を選ぶか、写真を直接送ってください：",
+            reply_markup=keyboard
+        )
+        return POST_PHOTO
+
+    from image_uploader import FOLDER_MAP
+    folder_names = list(FOLDER_MAP.keys())
+    non_therapists = ["セラピスト", "ダミー用画像", "店舗別バナー、ロゴ", "共通バナー", "店舗用❶", "聡電舎❷"]
+
+    if data == "therapists":
+        items = sorted([n for n in folder_names if n not in non_therapists])
+        title = "👧 セラピストを選択："
+    else:
+        items = sorted([n for n in folder_names if n in non_therapists])
+        title = "📁 フォルダを選択："
+
+    keyboard = []
+    row = []
+    for name in items:
+        row.append(InlineKeyboardButton(name[:12], callback_data=f"post_dl_folder:{name}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([
+        InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back"),
+        InlineKeyboardButton("📤 スキップ", callback_data="post_photo:skip"),
+    ])
+    await query.edit_message_text(title, reply_markup=InlineKeyboardMarkup(keyboard))
+    return POST_PHOTO
+
+
+async def post_drive_folder_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Drive フォルダ内の画像一覧を表示"""
+    query = update.callback_query
+    await query.answer()
+    folder_name = query.data.replace("post_dl_folder:", "")
+
+    await query.edit_message_text(f"⏳ {folder_name}の画像一覧を取得中...")
+
+    import asyncio as _asyncio
+    from image_uploader import get_image_list_from_drive
+    try:
+        files = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, get_image_list_from_drive, folder_name, 20),
+            timeout=30.0
+        )
+    except _asyncio.TimeoutError:
+        await query.edit_message_text("❌ タイムアウト。再度フォルダを選択してください。")
+        return POST_PHOTO
+    except Exception as e:
+        await query.edit_message_text(f"❌ 取得エラー: {str(e)[:100]}")
+        return POST_PHOTO
+
+    if not files:
+        await query.edit_message_text(
+            f"❌ {folder_name}に画像がありません。",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back")
+            ]])
+        )
+        return POST_PHOTO
+
+    keyboard = []
+    row = []
+    for f in files[:18]:
+        name = f["name"][:16]
+        row.append(InlineKeyboardButton(name, callback_data=f"post_dl_img:{f['id']}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([
+        InlineKeyboardButton("🔙 戻る", callback_data="post_dl_cat:back"),
+        InlineKeyboardButton("📤 スキップ", callback_data="post_photo:skip"),
+    ])
+    await query.edit_message_text(
+        f"📁 {folder_name} ({len(files)}件)\n画像を選択してください：",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return POST_PHOTO
+
+
+async def post_drive_img_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Drive から選択した画像で一斉投稿"""
+    query = update.callback_query
+    await query.answer()
+    file_id = query.data.replace("post_dl_img:", "")
+    title = context.user_data.get("post_title", "")
+    body = context.user_data.get("post_body", "")
+
+    await query.edit_message_text(f"⏳ 画像をダウンロード中...")
+
+    import asyncio as _asyncio
+    from image_uploader import download_image_from_drive
+    try:
+        image_bytes = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, download_image_from_drive, file_id),
+            timeout=60.0
+        )
+    except Exception as e:
+        await query.edit_message_text(f"❌ ダウンロードエラー: {str(e)[:100]}")
+        return POST_PHOTO
+
+    if not image_bytes:
+        await query.edit_message_text("❌ 画像のダウンロードに失敗しました。")
+        return POST_PHOTO
+
+    await query.edit_message_text(f"⏳ 「{title}」を一斉投稿中...")
+    await _execute_post(title, body, image_bytes, query.message.reply_text)
+    return ConversationHandler.END
+
+
+async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    title = context.user_data.get("post_title", "")
+    body = context.user_data.get("post_body", "")
+    image_bytes = None
+
+    if update.callback_query:
+        data = update.callback_query.data
+        await update.callback_query.answer()
+        if data == "post_photo:manual":
+            await update.callback_query.edit_message_text(
+                "📷 写真を送信してください："
+            )
+            return POST_PHOTO
+        # post_photo:skip → post without image
+        await update.callback_query.edit_message_text(f"⏳ 「{title}」を一斉投稿中...")
+        send_msg = update.callback_query.message.reply_text
+    else:
+        if not update.message.photo:
+            await update.message.reply_text("⚠️ 写真を送信するか「画像なしで投稿」を押してください。")
+            return POST_PHOTO
+        photo = update.message.photo[-1]
+        tg_file = await context.bot.get_file(photo.file_id)
+        import requests as _req
+        url = tg_file.file_path if tg_file.file_path.startswith("http") else f"https://api.telegram.org/file/bot{context.bot.token}/{tg_file.file_path}"
+        image_bytes = _req.get(url, timeout=30).content
+        await update.message.reply_text(f"⏳ 「{title}」を一斉投稿中...")
+        send_msg = update.message.reply_text
+
+    await _execute_post(title, body, image_bytes, send_msg)
     return ConversationHandler.END
 
 
@@ -2953,6 +3101,10 @@ def main() -> None:
             POST_PHOTO: [
                 MessageHandler(filters.PHOTO, post_photo),
                 CallbackQueryHandler(post_photo_skip, pattern="^post_photo:skip$"),
+                CallbackQueryHandler(post_photo, pattern="^post_photo:manual$"),
+                CallbackQueryHandler(post_drive_cat_callback, pattern="^post_dl_cat:"),
+                CallbackQueryHandler(post_drive_folder_callback, pattern="^post_dl_folder:"),
+                CallbackQueryHandler(post_drive_img_callback, pattern="^post_dl_img:"),
             ],
         },
         fallbacks=[MessageHandler(filters.Regex(r"^❌ キャンセル$"), post_start)],
