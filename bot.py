@@ -166,6 +166,18 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
     one_time_keyboard=False,
 )
 
+# メニューボタンの正規表現（会話状態でも常に効くようにするため）
+MENU_BUTTONS_REGEX = r"^(📲 ブログ一斉投稿|💼 出稼ぎスケジュール登録|📸 画像管理|💴 経費を入力|🗣️ AIでシフト操作|🤖 エージェント|💰 仮想通貨|📅 シフトDB|🔗 掲載ページ確認|⚙️ 各種管理画面|🌸 りおん自動運用|❌ キャンセル|/start|/cancel)$"
+
+
+async def force_exit_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """会話を強制終了してメニューに戻す。メッセージ自体は他ハンドラに渡らないので、押し直しを促す。"""
+    text = update.message.text if update.message else ""
+    await update.message.reply_text(
+        f"⏹ 進行中の操作を中断しました。\n「{text}」をもう一度押してください。"
+    )
+    return ConversationHandler.END
+
 # Notion セラピストDB URL
 NOTION_THERAPIST_DB_URL = "https://www.notion.so/20af9507f0cf811a9397000b1fd6918d"
 
@@ -3191,8 +3203,8 @@ def main() -> None:
         entry_points=[MessageHandler(filters.Regex(r"^📲 ブログ一斉投稿$"), post_start)],
         states={
             POST_NAME:       [CallbackQueryHandler(post_name_callback, pattern="^post_title:")],
-            POST_TITLE_FREE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_title_free_text)],
-            POST_BODY:       [MessageHandler(filters.TEXT & ~filters.COMMAND, post_body_text)],
+            POST_TITLE_FREE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), post_title_free_text)],
+            POST_BODY:       [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), post_body_text)],
             POST_PHOTO: [
                 MessageHandler(filters.PHOTO, post_photo),
                 CallbackQueryHandler(post_photo_skip, pattern="^post_photo:skip$"),
@@ -3202,8 +3214,12 @@ def main() -> None:
                 CallbackQueryHandler(post_drive_img_callback, pattern="^post_dl_img:"),
             ],
         },
-        fallbacks=[MessageHandler(filters.Regex(r"^❌ キャンセル$"), post_start)],
-        per_message=False
+        fallbacks=[
+            MessageHandler(filters.Regex(r"^❌ キャンセル$"), post_start),
+            MessageHandler(filters.Regex(MENU_BUTTONS_REGEX), force_exit_conv),
+        ],
+        per_message=False,
+        allow_reentry=True,
     )
     app.add_handler(post_conv)
 
@@ -3216,11 +3232,15 @@ def main() -> None:
             GUEST_END_DATE: [CallbackQueryHandler(guest_end_date_callback, pattern="^guest_end_date:")],
             GUEST_START_TIME: [CallbackQueryHandler(guest_in_time_callback, pattern="^guest_in_time:")],
             GUEST_END_TIME: [CallbackQueryHandler(guest_out_time_callback, pattern="^guest_out_time:")],
-            GUEST_EXPENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, guest_expense_text)],
-            GUEST_X_ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, guest_x_account_text)],
+            GUEST_EXPENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), guest_expense_text)],
+            GUEST_X_ACCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), guest_x_account_text)],
         },
-        fallbacks=[MessageHandler(filters.Regex(r"^❌ キャンセル$"), guest_start)],  # ダミーフォールバック
-        per_message=False
+        fallbacks=[
+            MessageHandler(filters.Regex(r"^❌ キャンセル$"), guest_start),
+            MessageHandler(filters.Regex(MENU_BUTTONS_REGEX), force_exit_conv),
+        ],
+        per_message=False,
+        allow_reentry=True,
     )
     app.add_handler(guest_conv)
     
@@ -3247,21 +3267,22 @@ def main() -> None:
         ],
         states={
             EXPENSE_DATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_date),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), expense_date),
             ],
             EXPENSE_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_amount),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), expense_amount),
             ],
             EXPENSE_CONTENT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_content),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), expense_content),
             ],
             EXPENSE_MEMO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_memo),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX), expense_memo),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", expense_cancel),
             MessageHandler(filters.Regex(r"^❌ キャンセル$"), expense_cancel),
+            MessageHandler(filters.Regex(MENU_BUTTONS_REGEX), force_exit_conv),
         ],
         allow_reentry=True,
     )
