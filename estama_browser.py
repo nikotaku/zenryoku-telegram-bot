@@ -74,21 +74,18 @@ class EstamaBrowser:
             self._logged_in = False
 
     async def login(self) -> bool:
-        """エスたまにログイン（複数フォールバック付き）"""
+        """エスたまにログイン"""
         logger.info(f"エスたまログイン試行: {ESTAMA_LOGIN_ID}")
         try:
             await self._ensure_browser()
             page = self._page
 
-            # ログインページへ移動
-            await page.goto(f"{BASE_URL}/login/", wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(2000)
+            await page.goto(f"{BASE_URL}/login/", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(1500)
 
-            # ページの内容をデバッグログ
             current_url = page.url
             logger.info(f"ログインページURL: {current_url}")
 
-            # 既に管理画面にいる場合はログイン済み
             if "/admin" in current_url and "/login" not in current_url:
                 self._logged_in = True
                 logger.info("エスたま: 既にログイン済み")
@@ -115,7 +112,6 @@ class EstamaBrowser:
                     formData.append('str[2][name]', 'r');
                     formData.append('str[2][value]', '');
                     formData.append('ctk', '{csrf_token}');
-
                     const resp = await fetch('{BASE_URL}/post/login_shop', {{
                         method: 'POST',
                         headers: {{
@@ -128,46 +124,46 @@ class EstamaBrowser:
                     const text = await resp.text();
                     try {{ return JSON.parse(text); }} catch(e) {{ return [text]; }}
                 }}""")
-
                 logger.info(f"Ajaxログインレスポンス: {response}")
 
                 if response and isinstance(response, list) and response[0] in ("OK", "REDIRECT_OK"):
                     self._logged_in = True
-                    await page.goto(f"{ADMIN_URL}/", wait_until="networkidle", timeout=15000)
+                    await page.goto(f"{ADMIN_URL}/", wait_until="domcontentloaded", timeout=15000)
                     logger.info("エスたまにAjaxログイン成功")
                     return True
 
-            # 方法2: 通常のフォーム入力ログイン
-            mail_input = page.locator(
-                'input[name="mail"], input[name="email"], input[type="email"], input#mail'
-            )
+            # 方法2: フォーム入力ログイン
+            mail_input = page.locator('input[name="mail"], input[name="email"], input[type="email"]')
             if await mail_input.count() > 0:
                 await mail_input.first.fill(ESTAMA_LOGIN_ID)
                 logger.info("メール入力完了")
-            else:
-                logger.warning("メール入力フィールドが見つかりません")
 
             pw_input = page.locator('input[name="password"], input[type="password"]')
             if await pw_input.count() > 0:
                 await pw_input.first.fill(ESTAMA_PASSWORD)
                 logger.info("パスワード入力完了")
-            else:
-                logger.warning("パスワード入力フィールドが見つかりません")
 
-            login_btn = page.locator(
-                'button:has-text("ログイン"), input[type="submit"], '
-                'a:has-text("ログイン"), .btn-login, button[type="submit"]'
+            submit_btn = page.locator(
+                'input[type="submit"], button[type="submit"], '
+                'button:has-text("ログイン"), a:has-text("ログイン")'
             )
-            if await login_btn.count() > 0:
-                await login_btn.first.click()
+            if await submit_btn.count() > 0:
+                await submit_btn.first.click()
                 logger.info("ログインボタンクリック")
+            else:
+                logger.error("ログインボタンが見つかりません")
+                return False
 
-            await page.wait_for_timeout(3000)
+            # リダイレクト完了を待つ
+            try:
+                await page.wait_for_url(f"**/admin/**", timeout=10000)
+            except Exception:
+                await page.wait_for_timeout(4000)
 
             current_url = page.url
             logger.info(f"ログイン後のURL: {current_url}")
 
-            if "/admin" in current_url or "/login" not in current_url:
+            if "/admin" in current_url and "/login" not in current_url:
                 self._logged_in = True
                 logger.info("エスたまにフォームログイン成功")
                 return True
@@ -505,60 +501,57 @@ class EstamaBrowser:
         """
         if not await self._ensure_login():
             return {"success": False, "message": "ログインに失敗しました"}
-            
+
+        tmp_path = None
         try:
             import tempfile
-            import os
-            
-            # 画像を一時ファイルに保存
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                tmp.write(image_bytes)
-                tmp_path = tmp.name
-                
-            page = self.page
-            await page.goto("https://estama.jp/admin/blog_edit/")
-            await page.wait_for_load_state("networkidle")
-            
-            # セラピストの選択（セレクトボックスまたはラジオボタンを想定）
-            # label要素やoptionテキストでマッチングを試みる
-            try:
-                # optionタグを探す
-                await page.locator(f"select option:has-text('{therapist_name}')").wait_for(timeout=2000)
-                # 親のselect要素を取得して値を選択
-                select_elem = page.locator(f"select:has(option:has-text('{therapist_name}'))").first
-                value = await page.locator(f"select option:has-text('{therapist_name}')").get_attribute("value")
-                await select_elem.select_option(value)
-            except Exception:
-                try:
-                    # ラジオボタンやラベルを想定
-                    await page.locator(f"text='{therapist_name}'").click(timeout=2000)
-                except Exception:
-                    pass # とりあえず進める
-                    
-            # タイトルと本文の入力
-            # 一般的なname属性やプレースホルダーで探す
-            await page.fill("input[name*='title'], input[placeholder*='タイトル']", title)
-            await page.fill("textarea[name*='body'], textarea[name*='content'], textarea[placeholder*='本文']", body)
-            
-            # 画像のアップロード
-            # fileタイプのinputを探す
-            file_input = page.locator("input[type='file']").first
-            await file_input.set_input_files(tmp_path)
-            
-            # 送信ボタンをクリック
-            submit_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('投稿'), button:has-text('保存')").first
-            await submit_btn.click()
-            
-            await page.wait_for_load_state("networkidle")
-            
-            os.unlink(tmp_path)
-            
-            # エラーメッセージがないか確認
+
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/blog_edit/", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            # タイトル入力
+            title_input = page.locator("input[name*='title'], input[placeholder*='タイトル'], input[name='title']")
+            if await title_input.count() > 0:
+                await title_input.first.fill(title)
+
+            # 本文入力
+            body_input = page.locator("textarea[name*='body'], textarea[name*='content'], textarea[placeholder*='本文'], textarea")
+            if await body_input.count() > 0:
+                await body_input.first.fill(body)
+
+            # 画像アップロード（画像がある場合のみ）
+            if image_bytes:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(image_bytes)
+                    tmp_path = tmp.name
+                file_input = page.locator("input[type='file']")
+                if await file_input.count() > 0:
+                    await file_input.first.set_input_files(tmp_path)
+
+            # 送信ボタン
+            submit_btn = page.locator(
+                "input[type='submit'], button[type='submit'], "
+                "button:has-text('投稿'), button:has-text('保存')"
+            )
+            if await submit_btn.count() > 0:
+                await submit_btn.first.click()
+                await page.wait_for_timeout(3000)
+            else:
+                return {"success": False, "message": "送信ボタンが見つかりません"}
+
             if await page.locator("text='エラー'").count() > 0:
                 return {"success": False, "message": "投稿画面でエラーが発生しました"}
-                
-            return {"success": True, "message": "投稿完了"}
-            
+
+            return {"success": True, "message": "エスたま投稿完了"}
+
         except Exception as e:
-            self.logger.error(f"エスたま日記投稿エラー: {e}")
+            logger.error(f"エスたま日記投稿エラー: {e}")
             return {"success": False, "message": str(e)}
+        finally:
+            if tmp_path:
+                try:
+                    import os
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
