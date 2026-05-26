@@ -3013,7 +3013,7 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """ボタン以外のテキストメッセージ — Gemini LLMで解析して適切な操作を実行"""
+    """ボタン以外のテキストメッセージ"""
     text = update.message.text.strip() if update.message.text else ""
 
     # AIシフト操作
@@ -3022,75 +3022,16 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if handled:
             return
 
-    # 仮想通貨取引入力待ちの場合（専用フローを優先）
+    # 仮想通貨取引入力待ち
     if context.user_data.get("crypto_awaiting_trade"):
         handled = await handle_crypto_trade_text(update, context)
         if handled:
             return
 
-    # テキストメッセージは常にGemini LLMで解析して実行
-    if not text:
+    # 新カテゴリ名入力待ち
+    if context.user_data.get("photo_save_awaiting_name"):
+        await handle_photo_name_text(update, context)
         return
-
-    await update.message.reply_text("🧠 AIが指示を解析中...")
-
-    import json as _json
-    try:
-        confirmation, action_json = await browser_agent.process_agent_command(text)
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ 解析エラー: {str(e)[:300]}\n\n"
-            "もう一度入力してください。",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return
-
-    try:
-        intent = _json.loads(action_json)
-    except Exception:
-        intent = {}
-
-    action_name = intent.get("action", "")
-    actions_list = intent.get("actions", [])
-
-    # 読み取り系・差異確認は確認なしで即実行
-    read_actions = {
-        "caskan_get_shifts", "caskan_get_casts", "caskan_get_rooms",
-        "estama_get_schedule", "estama_get_therapists", "diff_shifts", "unknown",
-        "notion_get_shifts", "notion_get_pending",
-    }
-
-    is_read_only = (
-        action_name in read_actions
-        or (actions_list and all(a.get("action") in read_actions for a in actions_list))
-    )
-
-    if is_read_only:
-        await update.message.reply_text("⏳ ブラウザで情報を取得中...")
-        try:
-            result = await browser_agent.execute_confirmed(action_json)
-            if len(result) > 4000:
-                chunks = _split_text(result, 3800)
-                for chunk in chunks:
-                    await update.message.reply_text(chunk)
-            else:
-                await update.message.reply_text(result)
-        except Exception as e:
-            await update.message.reply_text(f"❌ 実行エラー: {str(e)[:300]}")
-    else:
-        # 書き込み系は確認を求める
-        context.user_data["agent_pending_action"] = action_json
-
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="agent_nlp:execute"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="agent_nlp:cancel"),
-            ]
-        ]
-        await update.message.reply_text(
-            f"🤖 【操作確認】\n\n{confirmation}\n\n実行しますか？",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
 
 
 # ─── メイン ─────────────────────────────────────────────
