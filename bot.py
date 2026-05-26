@@ -79,12 +79,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-try:
-    import rion_auto_poster
-    RION_ENABLED = True
-except ImportError as e:
-    logger.warning(f"rion_auto_poster import失敗（tweepy未インストール？）: {e}")
-    RION_ENABLED = False
 
 
 # ─── ブログ一斉投稿 ConversationHandler ステート ────────────────
@@ -2617,108 +2611,54 @@ async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
-# ─── りおん自動運用 ───────────────────────────────────────────────────────
+# ─── 🌸 自動投稿メニュー（元:りおん自動運用）───────────────────────────────
 async def handle_rion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """りおん自動運用メニュー"""
-    if not RION_ENABLED:
-        await update.message.reply_text("⚠️ tweepyが未インストールのため利用できません。\n`pip install tweepy` を実行してください。")
-        return
+    """自動投稿メニュー"""
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✍️ 今すぐ投稿（ランダム）", callback_data="rion:post_random")],
-        [
-            InlineKeyboardButton("🌅 おはよう", callback_data="rion:post_morning"),
-            InlineKeyboardButton("📢 出勤告知", callback_data="rion:post_shift"),
-        ],
-        [
-            InlineKeyboardButton("💄 美容ネタ", callback_data="rion:post_beauty"),
-            InlineKeyboardButton("🧘 ピラティス", callback_data="rion:post_pilates"),
-        ],
-        [
-            InlineKeyboardButton("✈️ 旅行/パワースポット", callback_data="rion:post_travel"),
-            InlineKeyboardButton("🌙 おやすみ", callback_data="rion:post_night"),
-        ],
-        [InlineKeyboardButton("💬 仙台リプ実行（最大3件）", callback_data="rion:do_reply")],
+        [InlineKeyboardButton("📢 本日のシフト速報", callback_data="rion:today")],
+        [InlineKeyboardButton("🆕 明日のスタメン発表", callback_data="rion:tomorrow")],
+        [InlineKeyboardButton("✨ お得なご案内（プロモ）", callback_data="rion:promo")],
     ])
     await update.message.reply_text(
-        "🌸 【りおん自動運用】\n\n"
-        "投稿タイプを選択するか、スケジューラーに任せてください。\n\n"
-        "📅 自動投稿: 08:30 / 13:00 / 17:30 / 23:30\n"
-        "💬 自動リプ: 30分おき（仙台関連KW）",
+        "🌸 【自動投稿】\n\n"
+        "投稿タイプを選択してください。\n"
+        "承認リクエストがTelegramに届きます。",
         reply_markup=keyboard,
     )
 
 
 async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """りおんメニューのインラインボタン処理"""
+    """自動投稿メニューのインラインボタン処理"""
     query = update.callback_query
     await query.answer()
     action = query.data.replace("rion:", "")
 
-    POST_TYPE_MAP = {
-        "post_random":  None,
-        "post_morning": "morning",
-        "post_shift":   "shift_announce",
-        "post_beauty":  "beauty",
-        "post_pilates": "pilates",
-        "post_travel":  "travel_power",
-        "post_night":   "night",
-    }
-
-    if action in POST_TYPE_MAP:
-        await query.edit_message_text("⏳ 投稿文を生成中...")
-        import asyncio as _asyncio
-        from rion_persona import generate_post
-        post_type = POST_TYPE_MAP[action]
+    if action == "today":
+        await query.edit_message_text("⏳ 本日のシフトを取得中...")
         try:
-            text = await _asyncio.wait_for(
-                _asyncio.get_event_loop().run_in_executor(None, generate_post, post_type),
-                timeout=30.0
-            )
-        except _asyncio.TimeoutError:
-            await query.edit_message_text("❌ 生成タイムアウト（30秒）。GEMINI_API_KEYを確認してください。")
-            return
-        if not text:
-            await query.edit_message_text("❌ 生成に失敗しました。GEMINI_API_KEYが設定されているか確認してください。")
-            return
+            import auto_poster
+            await auto_poster.post_shift("today")
+            await query.edit_message_text("✅ 本日のシフト速報の承認リクエストを送信しました。")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
 
-        # プレビュー表示 → 確認ボタン
-        context.user_data["rion_pending_post"] = text
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ この内容で投稿する", callback_data="rion:confirm_post")],
-            [InlineKeyboardButton("🔄 再生成", callback_data=f"rion:{action}")],
-            [InlineKeyboardButton("❌ キャンセル", callback_data="rion:cancel")],
-        ])
-        await query.edit_message_text(
-            f"📝 【投稿プレビュー】\n\n{text}",
-            reply_markup=keyboard,
-        )
+    elif action == "tomorrow":
+        await query.edit_message_text("⏳ 明日のシフトを取得中...")
+        try:
+            import auto_poster
+            await auto_poster.post_shift("tomorrow")
+            await query.edit_message_text("✅ 明日のスタメン発表の承認リクエストを送信しました。")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
 
-    elif action == "confirm_post":
-        text = context.user_data.pop("rion_pending_post", "")
-        if not text:
-            await query.edit_message_text("❌ 投稿内容が見つかりません。")
-            return
-        await query.edit_message_text("⏳ 投稿中...")
-        import asyncio
-        success, err_msg = await asyncio.get_event_loop().run_in_executor(
-            None, rion_auto_poster.post_tweet, text
-        )
-        if success:
-            await query.edit_message_text(f"✅ 投稿しました！\n\n{text}")
-        else:
-            await query.edit_message_text(f"❌ 投稿に失敗しました。\n\n{err_msg}")
-
-    elif action == "do_reply":
-        await query.edit_message_text("⏳ 仙台関連ツイートを検索・返信中...")
-        import asyncio
-        count = await asyncio.get_event_loop().run_in_executor(
-            None, rion_auto_poster.search_and_reply, 3
-        )
-        await query.edit_message_text(f"✅ {count}件に返信しました。")
-
-    elif action == "cancel":
-        context.user_data.pop("rion_pending_post", None)
-        await query.edit_message_text("❌ キャンセルしました。")
+    elif action == "promo":
+        await query.edit_message_text("⏳ プロモ内容を生成中...")
+        try:
+            import auto_poster
+            await auto_poster.post_promo()
+            await query.edit_message_text("✅ お得なご案内の承認リクエストを送信しました。")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
 
 
 
@@ -2938,15 +2878,7 @@ def main() -> None:
         from image_uploader import warm_drive_cache
         loop.run_in_executor(None, warm_drive_cache)
 
-    if RION_ENABLED:
-        async def post_init_with_rion(application):
-            import asyncio
-            await post_init(application)
-            asyncio.create_task(rion_auto_poster.run_scheduler())
-            logger.info("りおん自動投稿スケジューラーをバックグラウンドで起動しました")
-        app.post_init = post_init_with_rion
-    else:
-        app.post_init = post_init
+    app.post_init = post_init
 
     # ポーリング開始
     logger.info("全力エステBot を起動しました。Ctrl+C で停止します。")
