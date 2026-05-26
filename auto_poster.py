@@ -40,24 +40,50 @@ PROMO_TEMPLATES = [
 ]
 
 def get_random_image(therapist_name=None):
-    target_dir = LOCAL_IMAGES_DIR
-    if therapist_name:
-        specific_dir = os.path.join(LOCAL_IMAGES_DIR, therapist_name)
-        if os.path.exists(specific_dir) and os.listdir(specific_dir):
-            target_dir = specific_dir
-            
-    if not os.path.exists(target_dir):
+    """photo_storageからランダムに1枚選んでTelegramからDLし、tempファイルパスを返す"""
+    import tempfile
+    import random
+    import requests as _requests
+    sys.path.insert(0, os.path.dirname(__file__))
+    try:
+        from photo_storage import get_photos, get_all_names
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        if not token:
+            return None
+
+        # セラピスト名で絞り込み、なければ全カテゴリから選ぶ
+        if therapist_name:
+            file_ids = get_photos(therapist_name)
+        else:
+            file_ids = []
+        if not file_ids:
+            all_names = get_all_names()
+            if not all_names:
+                return None
+            file_ids = get_photos(random.choice(all_names))
+        if not file_ids:
+            return None
+
+        file_id = random.choice(file_ids)
+
+        # TelegramからDL
+        r1 = _requests.get(f"https://api.telegram.org/bot{token}/getFile",
+                            params={"file_id": file_id}, timeout=10)
+        file_path = r1.json().get("result", {}).get("file_path", "")
+        if not file_path:
+            return None
+        img_bytes = _requests.get(
+            f"https://api.telegram.org/file/bot{token}/{file_path}", timeout=30
+        ).content
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        tmp.write(img_bytes)
+        tmp.close()
+        return tmp.name
+
+    except Exception as e:
+        logger.error(f"get_random_image エラー: {e}")
         return None
-        
-    all_images = []
-    for root, dirs, files in os.walk(target_dir):
-        for file in files:
-            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                all_images.append(os.path.join(root, file))
-                
-    if all_images:
-        return random.choice(all_images)
-    return None
 
 async def send_approval_request(title, body, image_path, post_type):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
