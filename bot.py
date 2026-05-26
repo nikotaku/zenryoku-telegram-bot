@@ -3210,7 +3210,6 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_dl_photo_callback, pattern=r"^dl_photo:"))
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
-    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS & filters.PHOTO, handle_channel_photo))
 
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
