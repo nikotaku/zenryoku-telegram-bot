@@ -291,48 +291,31 @@ async def handle_images(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """画像が送信された時の処理 — セラピスト選択ボタンを表示"""
+    """画像が送信された時の処理 — photo_storageのカテゴリ選択を表示"""
     if not update.message.photo:
         return
 
-    # 最高解像度の画像を取得
-    photo = update.message.photo[-1]
-    file_id = photo.file_id
-
-    # file_id をコンテキストに保存
+    file_id = update.message.photo[-1].file_id
     context.user_data["pending_photo_file_id"] = file_id
 
-    # セラピスト選択ボタンを生成
-    from image_uploader import FOLDER_MAP
-    folder_names = list(FOLDER_MAP.keys())
-    
-    non_therapists = ['衛生・清掃管理', '室内設備・備品', '店舗情報・メニュー', 'その他・宣伝素材', '店舗別バナー、ロゴ', '共通バナー', '店舗用❶', '聡電舎❷']
-    therapists = sorted([n for n in folder_names if n not in non_therapists and n and "dummy" not in n.lower() and "セラピスト" not in n])
-    others = sorted([n for n in folder_names if n in non_therapists])
-    
-    # 選択肢が多いので、一旦カテゴリを選ばせるか、直接全部出すか
-    # ここではセラピストだけ出す（その他フォルダ用には別のUIが必要かもしれないが一旦すべて出す）
-    all_targets = therapists + others
-    
+    from photo_storage import get_all_names
+    names = get_all_names()
+
     keyboard = []
     row = []
-    for name in all_targets:
+    for name in names:
         row.append(InlineKeyboardButton(name[:15], callback_data=f"photo_save:{name}"))
         if len(row) == 3:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-
-    # キャンセルボタン
+    keyboard.append([InlineKeyboardButton("➕ 新しいカテゴリ名で保存", callback_data="photo_save:__new__")])
     keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="photo_save:cancel")])
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
-        "📸 画像を受け取りました！\n\n"
-        "保存先のセラピストを選択してください:",
-        reply_markup=reply_markup,
+        "📸 画像を受け取りました！\n\n保存先を選択してください:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -520,42 +503,60 @@ async def handle_dl_therapist_callback(update: Update, context: ContextTypes.DEF
 
 
 async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """セラピスト選択コールバック — 画像をNotionに保存"""
+    """カテゴリ選択コールバック — photo_storageに保存してチャンネルに転送"""
     query = update.callback_query
     await query.answer()
 
-    data = query.data
-    if not data.startswith("photo_save:"):
-        return
+    data = query.data.replace("photo_save:", "")
 
-    therapist_name = data.replace("photo_save:", "")
-
-    if therapist_name == "cancel":
+    if data == "cancel":
         context.user_data.pop("pending_photo_file_id", None)
         await query.edit_message_text("❌ 写真の保存をキャンセルしました。")
         return
 
+    if data == "__new__":
+        context.user_data["photo_save_awaiting_name"] = True
+        await query.edit_message_text("📝 新しいカテゴリ名を入力してください（例：りな、スクエアバナー）：")
+        return
+
     file_id = context.user_data.get("pending_photo_file_id")
     if not file_id:
-        await query.edit_message_text("⚠️ 保存する画像が見つかりません。もう一度画像を送信してください。")
+        await query.edit_message_text("⚠️ 保存する画像が見つかりません。もう一度送信してください。")
         return
 
-    await query.edit_message_text(f"⏳ {therapist_name}のGoogle Driveに画像を保存中...")
+    await _save_photo_to_storage(query.edit_message_text, context, file_id, data)
 
-    # 画像をアップロードしてURLを取得
-    bot = context.bot
-    image_url = await upload_telegram_photo(bot, file_id, therapist_name)
 
-    if not image_url:
-        await query.edit_message_text("❌ 画像のアップロードに失敗しました。")
+async def handle_photo_name_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """新しいカテゴリ名の入力を受け取る"""
+    if not context.user_data.get("photo_save_awaiting_name"):
         return
+    context.user_data.pop("photo_save_awaiting_name", None)
+    name = update.message.text.strip()
+    file_id = context.user_data.get("pending_photo_file_id")
+    if not file_id:
+        await update.message.reply_text("⚠️ 保存する画像が見つかりません。もう一度送信してください。")
+        return
+    await _save_photo_to_storage(update.message.reply_text, context, file_id, name)
 
+
+async def _save_photo_to_storage(reply_fn, context, file_id: str, name: str):
+    """photo_storageに登録してチャンネルに転送"""
+    from photo_storage import add_photo
+    add_photo(name, file_id)
     context.user_data.pop("pending_photo_file_id", None)
 
-    await query.edit_message_text(
-        f"✅ {therapist_name}の画像をGoogle Driveに保存しました！\n\n"
-        f"📎 URL: {image_url}"
-    )
+    # チャンネルに転送（他デバイスからも参照できるようにする）
+    try:
+        await context.bot.send_photo(
+            chat_id=PHOTO_CHANNEL_ID,
+            photo=file_id,
+            caption=name
+        )
+    except Exception as e:
+        logger.warning(f"チャンネル転送失敗: {e}")
+
+    await reply_fn(f"✅ 「{name}」に写真を保存しました！")
 
 
 # ─── 写メ日記テンプレート ────────────────────────────────
@@ -3254,9 +3255,15 @@ def main() -> None:
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS & filters.PHOTO, handle_channel_photo))
+
+    # 新カテゴリ名入力（group=1で優先）
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & ~filters.Regex(MENU_BUTTONS_REGEX),
+        handle_photo_name_text
+    ), group=1)
 
     # インラインボタンコールバック
-    
     app.add_handler(CallbackQueryHandler(handle_img_up_callback, pattern=r"^img_up$"))
     app.add_handler(CallbackQueryHandler(handle_img_dl_callback, pattern=r"^img_dl$"))
     app.add_handler(CallbackQueryHandler(handle_dl_photo_callback, pattern=r"^dl_photo:"))
