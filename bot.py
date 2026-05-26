@@ -79,12 +79,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-try:
-    import rion_auto_poster
-    RION_ENABLED = True
-except ImportError as e:
-    logger.warning(f"rion_auto_poster import失敗（tweepy未インストール？）: {e}")
-    RION_ENABLED = False
 
 
 # ─── ブログ一斉投稿 ConversationHandler ステート ────────────────
@@ -158,8 +152,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📲 ブログ一斉投稿")],
         [KeyboardButton("💼 出稼ぎスケジュール登録")],
         [KeyboardButton("📸 画像管理"), KeyboardButton("💴 経費を入力")],
-        [KeyboardButton("🗣️ AIでシフト操作"), KeyboardButton("🤖 エージェント")],
-        [KeyboardButton("💰 仮想通貨"), KeyboardButton("📅 シフトDB")],
+        [KeyboardButton("🤖 エージェント"), KeyboardButton("💰 仮想通貨")],
         [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
         [KeyboardButton("🌸 りおん自動運用")],
     ],
@@ -168,7 +161,7 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 # メニューボタンの正規表現（会話状態でも常に効くようにするため）
-MENU_BUTTONS_REGEX = r"^(📲 ブログ一斉投稿|💼 出稼ぎスケジュール登録|📸 画像管理|💴 経費を入力|🗣️ AIでシフト操作|🤖 エージェント|💰 仮想通貨|📅 シフトDB|🔗 掲載ページ確認|⚙️ 各種管理画面|🌸 りおん自動運用|❌ キャンセル|/start|/cancel)$"
+MENU_BUTTONS_REGEX = r"^(📲 ブログ一斉投稿|💼 出稼ぎスケジュール登録|📸 画像管理|💴 経費を入力|🤖 エージェント|💰 仮想通貨|🔗 掲載ページ確認|⚙️ 各種管理画面|🌸 りおん自動運用|❌ キャンセル|/start|/cancel)$"
 
 
 async def force_exit_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,8 +199,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "💫 全力エステ Botへようこそ！\n\n"
         "下のメニューから操作を選んでください。\n\n"
-        "📅 シフトDB\n"
-        "　NotionシフトDBをマスタに、キャスカン・エスたまへ同期\n\n"
         "🤖 エージェント\n"
         "　自然言語でシフト登録・同期操作（例: 『明日りおんをキャスカンに登録』）\n\n"
         "💰 仮想通貨\n"
@@ -215,7 +206,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "💴 経費を入力\n"
         "　Googleスプレッドシートに経費を記録\n\n"
         "📸 画像管理\n"
-        "　セラピスト写真をGoogle Driveに保存・取得",
+        "　セラピスト写真を管理・取得",
         reply_markup=MENU_KEYBOARD,
     )
 
@@ -361,7 +352,7 @@ async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_dl_photo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """選択したカテゴリの写真を全件送信"""
+    """選択したカテゴリの写真を送信 — 各写真に「ブログに使う」ボタン付き"""
     query = update.callback_query
     await query.answer()
     name = query.data.replace("dl_photo:", "")
@@ -377,12 +368,30 @@ async def handle_dl_photo_callback(update: Update, context: ContextTypes.DEFAULT
     success = 0
     for fid in file_ids:
         try:
-            await context.bot.send_photo(chat_id=query.message.chat_id, photo=fid, caption=name)
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=fid,
+                caption=name,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📎 ブログ投稿に使う", callback_data=f"attach_post:{fid}")
+                ]])
+            )
             success += 1
         except Exception as e:
             logger.error(f"写真送信エラー {fid}: {e}")
 
     await query.message.reply_text(f"✅ {name}の写真 {success}枚を送信しました。")
+
+
+async def handle_attach_post_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """写真を選択してブログ投稿用に一時保存"""
+    query = update.callback_query
+    await query.answer()
+    file_id = query.data.replace("attach_post:", "")
+    context.user_data["quick_attach_file_id"] = file_id
+    await query.message.reply_text(
+        "📎 写真を選択しました！\n\n「📲 ブログ一斉投稿」を押してタイトル・本文を入力してください。\n写真は自動で添付されます。"
+    )
 
 
 async def handle_channel_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -788,6 +797,12 @@ async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     names = get_all_names()
 
     rows = []
+
+    # 事前に「ブログに使う」で選択済みの写真があれば最上部に表示
+    quick_fid = context.user_data.get("quick_attach_file_id")
+    if quick_fid:
+        rows.append([InlineKeyboardButton("✅ 選択済みの写真を使う", callback_data=f"post_ch_pick:{quick_fid}")])
+
     row = []
     for name in names:
         row.append(InlineKeyboardButton(name[:14], callback_data=f"post_ch:{name}"))
@@ -804,10 +819,12 @@ async def post_body_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"【タイトル】{title}\n"
         f"【本文】{text[:100]}{'...' if len(text) > 100 else ''}\n\n"
     )
-    if names:
+    if quick_fid:
+        msg += "📎 選択済みの写真があります。そのまま使うか、別の写真を選んでください："
+    elif names:
         msg += "📸 カテゴリを選ぶか、写真を直接送ってください："
     else:
-        msg += "📷 写真を直接送るか、画像なしで投稿してください\n（先にチャンネルに写真を登録してください）"
+        msg += "📷 写真を直接送るか、画像なしで投稿してください："
 
     await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
     return POST_PHOTO
@@ -1280,84 +1297,6 @@ async def guest_x_account_text(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 
-async def ai_shift_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "🗣️ 【AIでシフト操作】\n\n"
-        "シフトの追加や削除を、普通の言葉で入力してください。\n"
-        "（例：「明日のさくらのシフトを12時から20時で入れて」「今日のなおのシフトを消して」など）\n\n"
-        "※キャンセルする場合は「キャンセル」と送信してください。"
-    )
-    context.user_data["ai_shift_awaiting"] = True
-
-async def handle_ai_shift_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if not context.user_data.get("ai_shift_awaiting"):
-        return False
-        
-    text = update.message.text.strip()
-    context.user_data.pop("ai_shift_awaiting", None)
-    
-    if text == "キャンセル":
-        await update.message.reply_text("❌ キャンセルしました。", reply_markup=MENU_KEYBOARD)
-        return True
-        
-    await update.message.reply_text("🧠 AIが指示を解析中...")
-    
-    import browser_agent
-    try:
-        confirmation, action_json = await browser_agent.process_agent_command(text)
-        if confirmation:
-            keyboard = [
-                [InlineKeyboardButton("✅ 実行する", callback_data=f"ai_exec:yes")],
-                [InlineKeyboardButton("❌ キャンセル", callback_data=f"ai_exec:no")]
-            ]
-            context.user_data["ai_pending_action"] = action_json
-            await update.message.reply_text(confirmation, reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await update.message.reply_text("⚠️ 意図をうまく解析できませんでした。")
-    except Exception as e:
-        await update.message.reply_text(f"❌ エラーが発生しました: {e}")
-        
-    return True
-
-async def ai_exec_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    if not data.startswith("ai_exec:"):
-        return
-        
-    action = data.split(":")[1]
-    if action == "no":
-        context.user_data.pop("ai_pending_action", None)
-        await query.edit_message_text("❌ 実行をキャンセルしました。")
-        return
-        
-    action_json = context.user_data.get("ai_pending_action")
-    if not action_json:
-        await query.edit_message_text("⚠️ 期限切れです。もう一度入力してください。")
-        return
-        
-    await query.edit_message_text("⏳ キャスカンのシステムで実行中...")
-    import browser_agent
-    try:
-        import json
-        intent = json.loads(action_json)
-        # NLPがNotion向けに解析したアクションをキャスカン用にすり替える
-        if intent.get("action") == "notion_add_shift":
-            intent["action"] = "caskan_register_shift"
-            if "name" in intent.get("params", {}) and "cast_name" not in intent["params"]:
-                intent["params"]["cast_name"] = intent["params"]["name"]
-        elif intent.get("action") == "notion_delete_shift":
-            intent["action"] = "caskan_delete_shift"
-            if "name" in intent.get("params", {}) and "cast_name" not in intent["params"]:
-                intent["params"]["cast_name"] = intent["params"]["name"]
-                
-        action_json = json.dumps(intent, ensure_ascii=False)
-        result = await browser_agent.execute_confirmed(action_json)
-        await query.edit_message_text(result)
-    except Exception as e:
-        await query.edit_message_text(f"❌ 実行エラー: {e}")
 
 
 async def handle_imasugu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2414,240 +2353,6 @@ async def handle_crypto_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 
-# ─── 📅 シフトDB（Notionマスタ）─────────────────────────────
-
-async def handle_shift_db_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """シフトDBメニューを表示"""
-    keyboard = [
-        [
-            InlineKeyboardButton("📋 今日のシフトを確認", callback_data="shiftdb:today"),
-            InlineKeyboardButton("📆 今週のシフトを確認", callback_data="shiftdb:week"),
-        ],
-        [
-            InlineKeyboardButton("⬜ 未着手シフト一覧", callback_data="shiftdb:pending"),
-        ],
-        [
-            InlineKeyboardButton("🔄 今日のシフトを全同期", callback_data="shiftdb:sync_today"),
-        ],
-        [
-            InlineKeyboardButton("🟢 キャスカンに同期", callback_data="shiftdb:sync_caskan"),
-            InlineKeyboardButton("🔵 エスたまに同期", callback_data="shiftdb:sync_estama"),
-        ],
-        [
-            InlineKeyboardButton("🔍 差異を確認する", callback_data="shiftdb:diff"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "📅 【シフトDB】\n\n"
-        "NotionシフトDBをマスタとして、\n"
-        "キャスカン・エスたまへのシフト同期を管理します。\n\n"
-        "操作を選択してください:",
-        reply_markup=reply_markup,
-    )
-
-
-async def handle_shift_db_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """シフトDBコールバック処理"""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if not data.startswith("shiftdb:"):
-        return
-
-    action = data.replace("shiftdb:", "")
-
-    if action == "today":
-        await query.edit_message_text("⏳ NotionシフトDBから今日のシフトを取得中...")
-        try:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            shifts = notion_shift_client.query_shifts(date_str=today_str)
-            result = notion_shift_client.format_shifts_message(shifts, title=f"本日のシフト ({today_str})")
-            if len(result) > 4000:
-                result = result[:4000] + "\n..."
-            # 戻るボタン付きで表示
-            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
-            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "week":
-        await query.edit_message_text("⏳ NotionシフトDBから今週のシフトを取得中...")
-        try:
-            shifts = notion_shift_client.query_shifts_week()
-            result = notion_shift_client.format_shifts_message(shifts, title="今週のシフト")
-            if len(result) > 4000:
-                result = result[:4000] + "\n..."
-            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
-            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "pending":
-        await query.edit_message_text("⏳ 未着手のシフトを検索中...")
-        try:
-            shifts = notion_shift_client.query_pending_shifts(target="caskan")
-            result = notion_shift_client.format_shifts_message(shifts, title="未登録シフト")
-            if len(result) > 4000:
-                result = result[:4000] + "\n..."
-            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
-            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "sync_today":
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_all"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="shiftdb_confirm:cancel"),
-            ]
-        ]
-        await query.edit_message_text(
-            "🔄 【全同期確認】\n\n"
-            "NotionシフトDB → キャスカン＆エスたまへ\n"
-            "今日のシフトを同期します。\n\n"
-            "実行しますか？",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    elif action == "sync_caskan_week":
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_caskan"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="shiftdb_confirm:cancel"),
-            ]
-        ]
-        await query.edit_message_text(
-            "🟢 【キャスカン同期確認】\n\n"
-            "NotionシフトDB → キャスカンへ\n"
-            "未着手シフトを同期します。\n\n"
-            "実行しますか？",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    elif action == "sync_estama_week":
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ 実行する", callback_data="shiftdb_confirm:sync_estama"),
-                InlineKeyboardButton("❌ キャンセル", callback_data="shiftdb_confirm:cancel"),
-            ]
-        ]
-        await query.edit_message_text(
-            "🔵 【エスたま同期確認】\n\n"
-            "NotionシフトDB → エスたまへ\n"
-            "未同期シフトを同期します。\n\n"
-            "実行しますか？",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    elif action == "diff_week":
-        await query.edit_message_text("⏳ NotionシフトDB・キャスカン・エスたまのシフトを比較中...")
-        try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "diff_shifts_week", "params": {}}'
-            )
-            if len(result) > 4000:
-                result = result[:4000] + "\n..."
-            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
-            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "back":
-        keyboard = [
-            [
-                InlineKeyboardButton("📋 今日のシフトを確認", callback_data="shiftdb:today"),
-                InlineKeyboardButton("📆 今週のシフトを確認", callback_data="shiftdb:week"),
-            ],
-            [
-                InlineKeyboardButton("⬜ 未着手シフト一覧", callback_data="shiftdb:pending"),
-            ],
-            [
-                InlineKeyboardButton("🔄 今日のシフトを全同期", callback_data="shiftdb:sync_today"),
-            ],
-            [
-                InlineKeyboardButton("🟢 キャスカンに同期", callback_data="shiftdb:sync_caskan"),
-                InlineKeyboardButton("🔵 エスたまに同期", callback_data="shiftdb:sync_estama"),
-            ],
-            [
-                InlineKeyboardButton("🔍 差異を確認する", callback_data="shiftdb:diff"),
-            ],
-        ]
-        await query.edit_message_text(
-            "📅 【シフトDB】\n\n"
-            "NotionシフトDBをマスタとして、\n"
-            "キャスカン・エスたまへのシフト同期を管理します。\n\n"
-            "操作を選択してください:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-
-async def handle_shift_db_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """シフトDB同期確認コールバック"""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if not data.startswith("shiftdb_confirm:"):
-        return
-
-    action = data.replace("shiftdb_confirm:", "")
-
-    if action == "cancel":
-        await query.edit_message_text("❌ 操作をキャンセルしました。")
-        return
-
-    if action == "sync_all":
-        await query.edit_message_text(
-            "⏳ NotionシフトDB → キャスカン＆エスたまへ同期中...\n"
-            "しばらくお待ちください。"
-        )
-        try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "sync_all_week", "params": {}}'
-            )
-            if len(result) > 4000:
-                result = result[:4000] + "\n..."
-            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
-            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "sync_caskan_week":
-        await query.edit_message_text(
-            "⏳ NotionシフトDB → キャスカンへ同期中...\n"
-            "しばらくお待ちください。"
-        )
-        try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "sync_to_caskan_week", "params": {}}'
-            )
-            if len(result) > 4000:
-                result = result[:4000] + "\n..."
-            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
-            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-    elif action == "sync_estama_week":
-        await query.edit_message_text(
-            "⏳ NotionシフトDB → エスたまへ同期中...\n"
-            "しばらくお待ちください。"
-        )
-        try:
-            result = await browser_agent.execute_confirmed(
-                '{"action": "sync_to_estama_week", "params": {}}'
-            )
-            if len(result) > 4000:
-                result = result[:4000] + "\n..."
-            keyboard = [[InlineKeyboardButton("🔙 シフトDBメニューへ", callback_data="shiftdb:back")]]
-            await query.edit_message_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-
 # ─── 🤖 エージェント（ブラウザ自動操作）─────────────────────
 
 async def handle_agent_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2906,108 +2611,54 @@ async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
-# ─── りおん自動運用 ───────────────────────────────────────────────────────
+# ─── 🌸 自動投稿メニュー（元:りおん自動運用）───────────────────────────────
 async def handle_rion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """りおん自動運用メニュー"""
-    if not RION_ENABLED:
-        await update.message.reply_text("⚠️ tweepyが未インストールのため利用できません。\n`pip install tweepy` を実行してください。")
-        return
+    """自動投稿メニュー"""
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✍️ 今すぐ投稿（ランダム）", callback_data="rion:post_random")],
-        [
-            InlineKeyboardButton("🌅 おはよう", callback_data="rion:post_morning"),
-            InlineKeyboardButton("📢 出勤告知", callback_data="rion:post_shift"),
-        ],
-        [
-            InlineKeyboardButton("💄 美容ネタ", callback_data="rion:post_beauty"),
-            InlineKeyboardButton("🧘 ピラティス", callback_data="rion:post_pilates"),
-        ],
-        [
-            InlineKeyboardButton("✈️ 旅行/パワースポット", callback_data="rion:post_travel"),
-            InlineKeyboardButton("🌙 おやすみ", callback_data="rion:post_night"),
-        ],
-        [InlineKeyboardButton("💬 仙台リプ実行（最大3件）", callback_data="rion:do_reply")],
+        [InlineKeyboardButton("📢 本日のシフト速報", callback_data="rion:today")],
+        [InlineKeyboardButton("🆕 明日のスタメン発表", callback_data="rion:tomorrow")],
+        [InlineKeyboardButton("✨ お得なご案内（プロモ）", callback_data="rion:promo")],
     ])
     await update.message.reply_text(
-        "🌸 【りおん自動運用】\n\n"
-        "投稿タイプを選択するか、スケジューラーに任せてください。\n\n"
-        "📅 自動投稿: 08:30 / 13:00 / 17:30 / 23:30\n"
-        "💬 自動リプ: 30分おき（仙台関連KW）",
+        "🌸 【自動投稿】\n\n"
+        "投稿タイプを選択してください。\n"
+        "承認リクエストがTelegramに届きます。",
         reply_markup=keyboard,
     )
 
 
 async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """りおんメニューのインラインボタン処理"""
+    """自動投稿メニューのインラインボタン処理"""
     query = update.callback_query
     await query.answer()
     action = query.data.replace("rion:", "")
 
-    POST_TYPE_MAP = {
-        "post_random":  None,
-        "post_morning": "morning",
-        "post_shift":   "shift_announce",
-        "post_beauty":  "beauty",
-        "post_pilates": "pilates",
-        "post_travel":  "travel_power",
-        "post_night":   "night",
-    }
-
-    if action in POST_TYPE_MAP:
-        await query.edit_message_text("⏳ 投稿文を生成中...")
-        import asyncio as _asyncio
-        from rion_persona import generate_post
-        post_type = POST_TYPE_MAP[action]
+    if action == "today":
+        await query.edit_message_text("⏳ 本日のシフトを取得中...")
         try:
-            text = await _asyncio.wait_for(
-                _asyncio.get_event_loop().run_in_executor(None, generate_post, post_type),
-                timeout=30.0
-            )
-        except _asyncio.TimeoutError:
-            await query.edit_message_text("❌ 生成タイムアウト（30秒）。GEMINI_API_KEYを確認してください。")
-            return
-        if not text:
-            await query.edit_message_text("❌ 生成に失敗しました。GEMINI_API_KEYが設定されているか確認してください。")
-            return
+            import auto_poster
+            await auto_poster.post_shift("today")
+            await query.edit_message_text("✅ 本日のシフト速報の承認リクエストを送信しました。")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
 
-        # プレビュー表示 → 確認ボタン
-        context.user_data["rion_pending_post"] = text
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ この内容で投稿する", callback_data="rion:confirm_post")],
-            [InlineKeyboardButton("🔄 再生成", callback_data=f"rion:{action}")],
-            [InlineKeyboardButton("❌ キャンセル", callback_data="rion:cancel")],
-        ])
-        await query.edit_message_text(
-            f"📝 【投稿プレビュー】\n\n{text}",
-            reply_markup=keyboard,
-        )
+    elif action == "tomorrow":
+        await query.edit_message_text("⏳ 明日のシフトを取得中...")
+        try:
+            import auto_poster
+            await auto_poster.post_shift("tomorrow")
+            await query.edit_message_text("✅ 明日のスタメン発表の承認リクエストを送信しました。")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
 
-    elif action == "confirm_post":
-        text = context.user_data.pop("rion_pending_post", "")
-        if not text:
-            await query.edit_message_text("❌ 投稿内容が見つかりません。")
-            return
-        await query.edit_message_text("⏳ 投稿中...")
-        import asyncio
-        success, err_msg = await asyncio.get_event_loop().run_in_executor(
-            None, rion_auto_poster.post_tweet, text
-        )
-        if success:
-            await query.edit_message_text(f"✅ 投稿しました！\n\n{text}")
-        else:
-            await query.edit_message_text(f"❌ 投稿に失敗しました。\n\n{err_msg}")
-
-    elif action == "do_reply":
-        await query.edit_message_text("⏳ 仙台関連ツイートを検索・返信中...")
-        import asyncio
-        count = await asyncio.get_event_loop().run_in_executor(
-            None, rion_auto_poster.search_and_reply, 3
-        )
-        await query.edit_message_text(f"✅ {count}件に返信しました。")
-
-    elif action == "cancel":
-        context.user_data.pop("rion_pending_post", None)
-        await query.edit_message_text("❌ キャンセルしました。")
+    elif action == "promo":
+        await query.edit_message_text("⏳ プロモ内容を生成中...")
+        try:
+            import auto_poster
+            await auto_poster.post_promo()
+            await query.edit_message_text("✅ お得なご案内の承認リクエストを送信しました。")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
 
 
 
@@ -3015,12 +2666,6 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ"""
     text = update.message.text.strip() if update.message.text else ""
-
-    # AIシフト操作
-    if context.user_data.get("ai_shift_awaiting"):
-        handled = await handle_ai_shift_text(update, context)
-        if handled:
-            return
 
     # 仮想通貨取引入力待ち
     if context.user_data.get("crypto_awaiting_trade"):
@@ -3129,9 +2774,6 @@ def main() -> None:
         allow_reentry=True,
     )
     app.add_handler(guest_conv)
-    
-    app.add_handler(CallbackQueryHandler(ai_exec_callback, pattern="^ai_exec:"))
-    
 
     # コマンドの追加
     app.add_handler(CommandHandler("chatid", cmd_chatid))
@@ -3187,8 +2829,6 @@ def main() -> None:
     # メニューボタン — テキストメッセージ
     app.add_handler(MessageHandler(filters.Regex(r"^📸 画像管理$"), handle_images))
     app.add_handler(MessageHandler(filters.Regex(r"^🤖 エージェント$"), handle_agent_menu))
-    app.add_handler(MessageHandler(filters.Regex(r"^📅 シフトDB$"), handle_shift_db_menu))
-    app.add_handler(CommandHandler("shiftdb", handle_shift_db_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^🔗 掲載ページ確認$"), handle_media_pages))
     app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
     app.add_handler(MessageHandler(filters.Regex(r"^🌸 りおん自動運用$"), handle_rion_menu))
@@ -3210,7 +2850,6 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_dl_photo_callback, pattern=r"^dl_photo:"))
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
-    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS & filters.PHOTO, handle_channel_photo))
 
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
@@ -3220,8 +2859,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_agent_callback, pattern=r"^agent:"))
     app.add_handler(CallbackQueryHandler(handle_agent_confirm_callback, pattern=r"^agent_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_agent_nlp_confirm_callback, pattern=r"^agent_nlp:"))
-    app.add_handler(CallbackQueryHandler(handle_shift_db_callback, pattern=r"^shiftdb:"))
-    app.add_handler(CallbackQueryHandler(handle_shift_db_confirm_callback, pattern=r"^shiftdb_confirm:"))
+    app.add_handler(CallbackQueryHandler(handle_attach_post_callback, pattern=r"^attach_post:"))
 
     # その他のテキストメッセージ（最後に登録）
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
@@ -3232,7 +2870,6 @@ def main() -> None:
             BotCommand("start", "メインメニューを表示"),
             BotCommand("images", "画像管理"),
             BotCommand("agent", "AIブラウザエージェント"),
-            BotCommand("shiftdb", "シフトDB（Notionマスタ同期）"),
         ])
         logger.info("Telegramコマンドメニューを更新しました")
         # Drive フォルダ構成をバックグラウンドで先読み
@@ -3241,15 +2878,7 @@ def main() -> None:
         from image_uploader import warm_drive_cache
         loop.run_in_executor(None, warm_drive_cache)
 
-    if RION_ENABLED:
-        async def post_init_with_rion(application):
-            import asyncio
-            await post_init(application)
-            asyncio.create_task(rion_auto_poster.run_scheduler())
-            logger.info("りおん自動投稿スケジューラーをバックグラウンドで起動しました")
-        app.post_init = post_init_with_rion
-    else:
-        app.post_init = post_init
+    app.post_init = post_init
 
     # ポーリング開始
     logger.info("全力エステBot を起動しました。Ctrl+C で停止します。")
