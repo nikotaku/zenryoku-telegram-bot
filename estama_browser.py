@@ -684,6 +684,56 @@ class EstamaBrowser:
             logger.error(f"スケジュール状況更新エラー: {e}")
             return {"success": False, "message": f"エラー: {str(e)}", "changed": []}
 
+    async def dump_schedule_debug(self, screenshot_path: str = "/tmp/estama_schedule.png") -> dict:
+        """
+        デバッグ用: 出勤表ページのスクリーンショットと主要HTMLを取得する。
+        セレクタ調整のため、構造把握に使う。
+
+        Returns:
+            {"success": bool, "screenshot": str, "html": str, "message": str}
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました", "screenshot": "", "html": ""}
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/schedule/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            try:
+                await page.screenshot(path=screenshot_path, full_page=True)
+            except Exception as se:
+                logger.warning(f"スクショ取得失敗: {se}")
+                screenshot_path = ""
+
+            # 〇/× を含むテーブル（なければ最大のテーブル/body）のHTMLを抽出
+            html = await page.evaluate(r"""() => {
+                const marks = ['〇', '○', '◯', '◎', '×', '✕', '✖'];
+                const tables = Array.from(document.querySelectorAll('table'));
+                let best = null, bestScore = -1;
+                for (const t of tables) {
+                    const txt = t.textContent || '';
+                    const score = marks.reduce((s, m) => s + (txt.split(m).length - 1), 0);
+                    if (score > bestScore) { bestScore = score; best = t; }
+                }
+                const el = (best && bestScore > 0) ? best : (tables[0] || document.body);
+                let h = el.outerHTML || '';
+                // 長すぎる場合は属性把握に十分な範囲で切る
+                if (h.length > 12000) h = h.slice(0, 12000) + '\n<!-- ...truncated... -->';
+                return h;
+            }""")
+
+            return {
+                "success": True,
+                "screenshot": screenshot_path,
+                "html": html,
+                "message": "出勤表ページのHTML/スクショを取得しました",
+            }
+
+        except Exception as e:
+            logger.error(f"出勤表デバッグ取得エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}", "screenshot": "", "html": ""}
+
     # ─── シフト同期（キャスカン → エスたま） ─────────────────
 
     async def sync_from_caskan(self, caskan_shifts: list) -> dict:

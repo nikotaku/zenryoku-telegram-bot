@@ -2279,6 +2279,7 @@ def _guidance_menu_keyboard(schedule: list) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📣 今すぐアピール実行", callback_data="guidance:appeal")],
         [InlineKeyboardButton("💃 セラピストアピール実行", callback_data="guidance:cast_appeal")],
         [InlineKeyboardButton("🗓️ 出勤表を今すぐ更新", callback_data="guidance:sched_update")],
+        [InlineKeyboardButton("🔍 出勤表HTML確認(デバッグ)", callback_data="guidance:sched_debug")],
         [InlineKeyboardButton("➕ スケジュール追加", callback_data="guidance:add")],
     ]
     for i, entry in enumerate(sorted(schedule, key=lambda x: x["time"])):
@@ -2367,6 +2368,37 @@ async def handle_guidance_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text(f"✅ {msg}")
             else:
                 await query.edit_message_text(f"❌ {msg}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+        return
+
+    if action == "sched_debug":
+        await query.edit_message_text("⏳ 出勤表ページのHTML・スクショを取得中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.dump_schedule_debug()
+            await browser.close()
+            if not result.get("success"):
+                await query.edit_message_text(f"❌ {result.get('message', '')}")
+                return
+            chat_id = query.message.chat_id
+            # スクリーンショット
+            shot = result.get("screenshot", "")
+            if shot and os.path.exists(shot):
+                with open(shot, "rb") as f:
+                    await context.bot.send_photo(chat_id=chat_id, photo=f, caption="📸 出勤表ページ")
+            # HTML をファイルとして送信
+            html = result.get("html", "")
+            if html:
+                import io
+                buf = io.BytesIO(html.encode("utf-8"))
+                buf.name = "schedule.html"
+                await context.bot.send_document(
+                    chat_id=chat_id, document=buf, filename="schedule.html",
+                    caption="🔍 出勤表テーブルのHTML（このファイルを開発者に共有してください）",
+                )
+            await query.edit_message_text("✅ 出勤表ページのHTML・スクショを送信しました。")
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {e}")
         return
