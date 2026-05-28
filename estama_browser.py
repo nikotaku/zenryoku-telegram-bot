@@ -73,9 +73,95 @@ class EstamaBrowser:
             self._page = None
             self._logged_in = False
 
+    def _requests_login_cookies(self):
+        """
+        requests でエスたまに Ajax ログインし、Playwright 形式の Cookie を返す。
+        estama_client.py と同じ実績のあるログインフローを使う。
+        失敗時は None。
+        """
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+        except Exception as e:
+            logger.warning(f"requests/bs4 が利用できません: {e}")
+            return None
+        try:
+            session = requests.Session()
+            session.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            })
+            resp = session.get(f"{BASE_URL}/login/", timeout=15)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            csrf_input = soup.find("input", {"id": "csrf_footer"})
+            csrf_token = csrf_input["value"] if csrf_input else ""
+            if not csrf_token:
+                logger.error("requests: CSRFトークン取得失敗")
+                return None
+
+            resp = session.post(
+                f"{BASE_URL}/post/login_shop",
+                data={
+                    "str[0][name]": "mail",
+                    "str[0][value]": ESTAMA_LOGIN_ID,
+                    "str[1][name]": "password",
+                    "str[1][value]": ESTAMA_PASSWORD,
+                    "str[2][name]": "r",
+                    "str[2][value]": "",
+                    "ctk": csrf_token,
+                },
+                timeout=15,
+                headers={
+                    "Referer": f"{BASE_URL}/login/",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+            ok = False
+            try:
+                data = resp.json()
+                ok = data and data[0] in ("OK", "REDIRECT_OK")
+            except Exception:
+                ok = False
+            if not ok:
+                logger.error(f"requests: ログイン失敗 status={resp.status_code} body={resp.text[:120]}")
+                return None
+
+            cookies = []
+            for c in session.cookies:
+                cookies.append({
+                    "name": c.name,
+                    "value": c.value,
+                    "domain": c.domain or "estama.jp",
+                    "path": c.path or "/",
+                })
+            logger.info(f"requests: ログイン成功（Cookie {len(cookies)}件取得）")
+            return cookies or None
+        except Exception as e:
+            logger.error(f"requests ログインエラー: {e}")
+            return None
+
     async def login(self) -> bool:
         """エスたまにログイン"""
         logger.info(f"エスたまログイン試行: {ESTAMA_LOGIN_ID}")
+
+        # 方法0: requests で確実にログインし、Cookie を Playwright に注入する
+        try:
+            cookies = self._requests_login_cookies()
+            if cookies:
+                await self._ensure_browser()
+                await self._context.add_cookies(cookies)
+                await self._page.goto(f"{ADMIN_URL}/", wait_until="domcontentloaded", timeout=20000)
+                if "/login" not in self._page.url:
+                    self._logged_in = True
+                    logger.info("エスたま: requests Cookie 注入でログイン成功")
+                    return True
+                logger.warning("Cookie 注入後も未ログイン状態。ブラウザログインにフォールバック")
+        except Exception as e:
+            logger.warning(f"Cookie 注入ログイン失敗（フォールバックします）: {e}")
+
         try:
             await self._ensure_browser()
             page = self._page
