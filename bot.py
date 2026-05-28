@@ -12,6 +12,8 @@ load_dotenv()
 """
 
 import os
+import re
+import json
 import logging
 from datetime import datetime, time
 import pytz
@@ -68,6 +70,8 @@ from bitbank_client import (
 # ─── 設定 ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PHOTO_CHANNEL_ID = int(os.environ.get("PHOTO_CHANNEL_ID", "-5269472642"))
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "8419641279")
+GUIDANCE_SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), "guidance_schedule.json")
 
 if not BOT_TOKEN:
     raise ValueError("環境変数 TELEGRAM_BOT_TOKEN が設定されていません")
@@ -154,14 +158,14 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📸 画像管理"), KeyboardButton("💴 経費を入力")],
         [KeyboardButton("🤖 エージェント"), KeyboardButton("💰 仮想通貨")],
         [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
-        [KeyboardButton("🌸 りおん自動運用")],
+        [KeyboardButton("🌸 りおん自動運用"), KeyboardButton("⏰ ご案内設定")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
 )
 
 # メニューボタンの正規表現（会話状態でも常に効くようにするため）
-MENU_BUTTONS_REGEX = r"^(📲 ブログ一斉投稿|💼 出稼ぎスケジュール登録|📸 画像管理|💴 経費を入力|🤖 エージェント|💰 仮想通貨|🔗 掲載ページ確認|⚙️ 各種管理画面|🌸 りおん自動運用|❌ キャンセル|/start|/cancel)$"
+MENU_BUTTONS_REGEX = r"^(📲 ブログ一斉投稿|💼 出稼ぎスケジュール登録|📸 画像管理|💴 経費を入力|🤖 エージェント|💰 仮想通貨|🔗 掲載ページ確認|⚙️ 各種管理画面|🌸 りおん自動運用|⏰ ご案内設定|❌ キャンセル|/start|/cancel)$"
 
 
 async def force_exit_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2231,6 +2235,215 @@ async def handle_media_pages(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+# ─── ⏰ ご案内状況 自動設定 ─────────────────────────────────────────────────
+
+# 11:00〜25:00(=01:00)の毎時 → 今すぐご案内可
+_DEFAULT_GUIDANCE_SCHEDULE = [
+    {"time": f"{h:02d}:00", "status": "now"}
+    for h in list(range(11, 24)) + [0, 1]
+]
+
+STATUS_LABELS = {
+    "now": "今すぐご案内可",
+    "accepting": "受付中",
+    "ended": "ご案内終了",
+}
+
+
+def load_guidance_schedule() -> list:
+    if os.path.exists(GUIDANCE_SCHEDULE_FILE):
+        try:
+            with open(GUIDANCE_SCHEDULE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # 初回はデフォルトで保存
+    save_guidance_schedule(_DEFAULT_GUIDANCE_SCHEDULE)
+    return list(_DEFAULT_GUIDANCE_SCHEDULE)
+
+
+def save_guidance_schedule(schedule: list):
+    with open(GUIDANCE_SCHEDULE_FILE, "w", encoding="utf-8") as f:
+        json.dump(schedule, f, ensure_ascii=False, indent=2)
+
+
+def _guidance_menu_keyboard(schedule: list) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton("▶️ 今すぐご案内可", callback_data="guidance:run:now"),
+            InlineKeyboardButton("▶️ 受付中", callback_data="guidance:run:accepting"),
+        ],
+        [
+            InlineKeyboardButton("▶️ ご案内終了", callback_data="guidance:run:ended"),
+        ],
+        [InlineKeyboardButton("➕ スケジュール追加", callback_data="guidance:add")],
+    ]
+    for i, entry in enumerate(sorted(schedule, key=lambda x: x["time"])):
+        label = STATUS_LABELS.get(entry["status"], entry["status"])
+        rows.append([
+            InlineKeyboardButton(f"🕐 {entry['time']} → {label}", callback_data="guidance:noop"),
+            InlineKeyboardButton("🗑️", callback_data=f"guidance:del:{i}"),
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _guidance_menu_text(schedule: list) -> str:
+    text = "⏰ 【ご案内状況 自動設定】\n\n"
+    if schedule:
+        text += "📅 現在のスケジュール:\n"
+        for entry in sorted(schedule, key=lambda x: x["time"]):
+            label = STATUS_LABELS.get(entry["status"], entry["status"])
+            text += f"  {entry['time']} → {label}\n"
+    else:
+        text += "スケジュールは未設定です。\n"
+    text += "\n手動実行またはスケジュールを変更できます。"
+    return text
+
+
+async def handle_guidance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⏰ ご案内設定メニュー"""
+    schedule = load_guidance_schedule()
+    await update.message.reply_text(
+        _guidance_menu_text(schedule),
+        reply_markup=_guidance_menu_keyboard(schedule),
+    )
+
+
+async def handle_guidance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """ご案内状況コールバック処理"""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split(":")
+    action = parts[1]
+
+    if action == "noop":
+        return
+
+    if action == "run":
+        status = parts[2]
+        label = STATUS_LABELS.get(status, status)
+        await query.edit_message_text(f"⏳ エスたまに「{label}」を設定中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.set_guidance_status(status)
+            await browser.close()
+            msg = result.get("message", "")
+            if result.get("success"):
+                await query.edit_message_text(f"✅ {msg}")
+            else:
+                await query.edit_message_text(f"❌ {msg}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+
+    elif action == "add":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🟢 今すぐご案内可", callback_data="guidance:addst:now"),
+                InlineKeyboardButton("🟡 受付中", callback_data="guidance:addst:accepting"),
+            ],
+            [
+                InlineKeyboardButton("🔴 ご案内終了", callback_data="guidance:addst:ended"),
+                InlineKeyboardButton("❌ キャンセル", callback_data="guidance:addst:cancel"),
+            ],
+        ])
+        await query.edit_message_text("追加するご案内状況を選択してください:", reply_markup=keyboard)
+
+    elif action == "addst":
+        status = parts[2]
+        if status == "cancel":
+            schedule = load_guidance_schedule()
+            await query.edit_message_text(
+                _guidance_menu_text(schedule),
+                reply_markup=_guidance_menu_keyboard(schedule),
+            )
+            return
+        context.user_data["guidance_pending_status"] = status
+        label = STATUS_LABELS.get(status, status)
+        await query.edit_message_text(
+            f"「{label}」を設定する時刻を入力してください。\n\n"
+            "形式: HH:MM（例: 11:00、23:30）"
+        )
+
+    elif action == "del":
+        schedule = load_guidance_schedule()
+        sorted_schedule = sorted(schedule, key=lambda x: x["time"])
+        idx = int(parts[2])
+        if 0 <= idx < len(sorted_schedule):
+            removed = sorted_schedule.pop(idx)
+            save_guidance_schedule(sorted_schedule)
+            label = STATUS_LABELS.get(removed["status"], removed["status"])
+            await query.edit_message_text(
+                f"🗑️ {removed['time']} → {label} を削除しました。\n\n" +
+                _guidance_menu_text(sorted_schedule),
+                reply_markup=_guidance_menu_keyboard(sorted_schedule),
+            )
+
+
+async def handle_guidance_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """スケジュール追加の時刻テキスト入力処理"""
+    if not context.user_data.get("guidance_pending_status"):
+        return False
+
+    text = update.message.text.strip()
+    status = context.user_data.get("guidance_pending_status")
+
+    if not re.match(r"^\d{1,2}:\d{2}$", text):
+        await update.message.reply_text("❌ HH:MM 形式で入力してください（例: 11:00）")
+        return True
+
+    h, m = map(int, text.split(":"))
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        await update.message.reply_text("❌ 無効な時刻です。0:00〜23:59 の範囲で入力してください。")
+        return True
+
+    context.user_data.pop("guidance_pending_status", None)
+    time_str = f"{h:02d}:{m:02d}"
+    schedule = load_guidance_schedule()
+    schedule = [e for e in schedule if not (e["time"] == time_str and e["status"] == status)]
+    schedule.append({"time": time_str, "status": status})
+    save_guidance_schedule(schedule)
+
+    label = STATUS_LABELS.get(status, status)
+    await update.message.reply_text(
+        f"✅ {time_str} → {label} を追加しました！\n\n" +
+        _guidance_menu_text(schedule),
+        reply_markup=_guidance_menu_keyboard(schedule),
+    )
+    return True
+
+
+async def guidance_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """毎分実行: スケジュール時刻に一致したらご案内状況を自動設定"""
+    jst = pytz.timezone("Asia/Tokyo")
+    now = datetime.now(jst)
+    current_time = f"{now.hour:02d}:{now.minute:02d}"
+
+    schedule = load_guidance_schedule()
+    for entry in schedule:
+        if entry["time"] == current_time:
+            status = entry["status"]
+            label = STATUS_LABELS.get(status, status)
+            try:
+                from estama_browser import EstamaBrowser
+                browser = EstamaBrowser()
+                result = await browser.set_guidance_status(status)
+                await browser.close()
+                success = result.get("success", False)
+                msg = result.get("message", "")
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=f"⏰ 【自動実行】ご案内状況\n時刻: {current_time}\n設定: {label}\n{'✅ 成功' if success else '❌ 失敗'}: {msg}",
+                )
+            except Exception as e:
+                logger.error(f"guidance_check_job エラー: {e}")
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=f"❌ ご案内自動設定エラー\n時刻: {current_time} → {label}\n{e}",
+                )
+
+
 # ─── 各種管理画面 ─────────────────────────────────────────────────────────
 ADMIN_DASHBOARDS = [
     # SNS / LINE
@@ -2326,6 +2539,12 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ"""
+    # ご案内スケジュール時刻入力待ち
+    if context.user_data.get("guidance_pending_status"):
+        handled = await handle_guidance_time_text(update, context)
+        if handled:
+            return
+
     # 新カテゴリ名入力待ち
     if context.user_data.get("photo_save_awaiting_name"):
         await handle_photo_name_text(update, context)
@@ -2440,6 +2659,10 @@ def main() -> None:
     app.job_queue.run_daily(scheduled_sync, time(hour=12, minute=0, tzinfo=jst))
     app.job_queue.run_daily(scheduled_sync, time(hour=18, minute=0, tzinfo=jst))
 
+    # ご案内状況 自動設定（毎分チェック）
+    from datetime import timedelta
+    app.job_queue.run_repeating(guidance_check_job, interval=timedelta(minutes=1), first=10)
+
     # ─── 経費入力 ConversationHandler ───────────────────
     expense_conv = ConversationHandler(
         entry_points=[
@@ -2486,6 +2709,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
     app.add_handler(MessageHandler(filters.Regex(r"^🌸 りおん自動運用$"), handle_rion_menu))
     app.add_handler(CallbackQueryHandler(handle_rion_callback, pattern=r"^rion:"))
+    app.add_handler(MessageHandler(filters.Regex(r"^⏰ ご案内設定$"), handle_guidance_menu))
+    app.add_handler(CallbackQueryHandler(handle_guidance_callback, pattern=r"^guidance:"))
 
     # 画像メッセージ — 写真管理
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
