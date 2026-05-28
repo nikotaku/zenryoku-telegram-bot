@@ -200,7 +200,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "💫 全力エステ Botへようこそ！\n\n"
         "下のメニューから操作を選んでください。\n\n"
         "🤖 エージェント\n"
-        "　自然言語でシフト登録・同期操作（例: 『明日りおんをキャスカンに登録』）\n\n"
+        "　キャスカン・エスたまへのシフト同期\n\n"
         "💰 仮想通貨\n"
         "　bitbankの保有資産を確認\n\n"
         "💴 経費を入力\n"
@@ -1916,134 +1916,9 @@ def _split_text(text: str, max_length: int) -> list:
         chunks.append(current)
     return chunks
 
-# ─── 💰 仮想通貨（bitbank ポートフォリオ＋自然言語取引）────────────────────
-
-# ─── Gemini による取引インテント解析 ──────────────────────────────────────
-
-CRYPTO_TRADE_SYSTEM_PROMPT = """あなたは仮想通貨取引アシスタントです。
-ユーザーの自然言語の取引指示を解析し、bitbank取引所での注文内容をJSON形式で返してください。
-
-## 対応する取引指示の例
-- 「XRPを1000円分買って」→ JPY金額指定の買い注文
-- 「BTCを0.001売って」→ 数量指定の売り注文
-- 「XLMを全部売って」→ 保有全量の売り注文
-- 「ETHを5000円買いたい」→ JPY金額指定の買い注文
-- 「ドージコインを100枚買って」→ 数量指定の買い注文
-
-## 通貨名の対応
-- ビットコイン/BTC → btc
-- イーサリアム/ETH → eth
-- リップル/XRP → xrp
-- ステラルーメン/XLM → xlm
-- ライトコイン/LTC → ltc
-- ドージコイン/DOGE → doge
-- ソラナ/SOL → sol
-- ポルカドット/DOT → dot
-- アバランチ/AVAX → avax
-- その他は英語シンボルをそのまま小文字で使用
-
-## 出力形式
-必ず以下のJSON形式で返してください。余計なテキストは含めないでください。
-
-```json
-{
-  "asset": "通貨シンボル（小文字）",
-  "side": "buy または sell",
-  "amount_type": "quantity（数量指定）または jpy（JPY金額指定）または all（全量売り）",
-  "amount": 数値（数量またはJPY金額。allの場合は0）,
-  "confidence": 0.0〜1.0（解析の確信度）,
-  "error": null または "エラーメッセージ"
-}
-```
-
-## 注意事項
-- 取引指示でない場合は error に「取引指示ではありません」を設定してください
-- 通貨が特定できない場合は error に「通貨が特定できません」を設定してください
-- 数量が不明な場合は error に「数量または金額を指定してください」を設定してください
-- JPYペアが存在しない通貨の場合は error に「JPYペアが存在しない通貨です」を設定してください
-"""
+# ─── 💰 仮想通貨（bitbank ポートフォリオ）────────────────────
 
 
-async def parse_trade_intent(user_message: str) -> dict:
-    """
-    Gemini APIでユーザーの自然言語取引指示を解析する。
-
-    Returns:
-        {
-            "asset": str,          # 通貨シンボル（例: "xrp"）
-            "side": str,           # "buy" or "sell"
-            "amount_type": str,    # "quantity" / "jpy" / "all"
-            "amount": float,       # 数量またはJPY金額
-            "confidence": float,
-            "error": None or str,
-        }
-    """
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-        model = genai.GenerativeModel("gemini-2.5-flash")
-
-        prompt = f"{CRYPTO_TRADE_SYSTEM_PROMPT}\n\n取引指示: {user_message}"
-
-        response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": prompt}]}],
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=500,
-                temperature=0.1,
-                response_mime_type="application/json",
-            ),
-        )
-
-        import json as _json
-        result = _json.loads(response.text.strip())
-        logger.info(f"取引インテント解析結果: {result}")
-        return result
-
-    except Exception as e:
-        logger.error(f"取引インテント解析エラー: {e}")
-        return {
-            "asset": None,
-            "side": None,
-            "amount_type": None,
-            "amount": 0,
-            "confidence": 0.0,
-            "error": f"解析エラー: {str(e)[:100]}",
-        }
-
-
-def _format_trade_confirmation(asset: str, side: str, amount_type: str,
-                               amount: float, price_jpy: float,
-                               actual_quantity: float, actual_jpy: float) -> str:
-    """
-    取引確認メッセージを生成する
-    """
-    asset_upper = asset.upper()
-    name = ASSET_NAMES.get(asset, asset_upper)
-    side_str = "🟢 買い" if side == "buy" else "🔴 売り"
-    precision = AMOUNT_PRECISION.get(asset, 4)
-
-    if precision <= 0:
-        qty_str = f"{actual_quantity:,.0f}"
-    elif precision <= 4:
-        qty_str = f"{actual_quantity:,.{precision}f}"
-    else:
-        qty_str = f"{actual_quantity:.{precision}f}".rstrip("0").rstrip(".")
-
-    price_str = f"¥{price_jpy:,.2f}" if price_jpy >= 1 else f"¥{price_jpy:.6f}"
-
-    lines = [
-        "⚠️ 【取引確認】",
-        "",
-        f"通貨:     {asset_upper} ({name})",
-        f"売買:     {side_str}",
-        f"数量:     {qty_str} {asset_upper}",
-        f"現在価格: {price_str}",
-        f"概算金額: ¥{actual_jpy:,.0f}",
-        "",
-        "この注文を実行しますか？",
-        "（成行注文のため、実際の約定価格は変動する場合があります）",
-    ]
-    return "\n".join(lines)
 
 
 async def handle_crypto_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2052,173 +1927,12 @@ async def handle_crypto_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [
             InlineKeyboardButton("📊 ポートフォリオを表示", callback_data="crypto:portfolio"),
         ],
-        [
-            InlineKeyboardButton("💱 取引する（自然言語）", callback_data="crypto:trade_input"),
-        ],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
         "💰 【仮想通貨】\n\n"
-        "bitbank の保有資産確認・取引ができます。\n\n"
-        "📊 ポートフォリオ: 保有資産を確認\n"
-        "💱 取引する: 自然言語で売買注文\n\n"
-        "例: 「XRPを1000円分買って」「BTCを0.001売って」「XLMを全部売って」",
-        reply_markup=reply_markup,
-    )
-
-
-async def handle_crypto_trade_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    仮想通貨メニューの「取引する」ボタン押下後、
-    自然言語入力を待機するモードに入る
-    """
-    context.user_data["crypto_awaiting_trade"] = True
-    await update.message.reply_text(
-        "💱 【取引入力】\n\n"
-        "取引内容を自然言語で入力してください。\n\n"
-        "例:\n"
-        "・「XRPを1000円分買って」\n"
-        "・「BTCを0.001売って」\n"
-        "・「XLMを全部売って」\n"
-        "・「ETHを5000円買いたい」\n\n"
-        "⚠️ 注文前に確認画面が表示されます。",
-        reply_markup=MENU_KEYBOARD,
-    )
-
-
-async def handle_crypto_trade_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    自然言語取引入力を処理する。
-    context.user_data["crypto_awaiting_trade"] が True の場合のみ処理。
-    Returns: True if handled, False otherwise
-    """
-    if not context.user_data.get("crypto_awaiting_trade"):
-        return False
-
-    text = update.message.text.strip()
-    context.user_data.pop("crypto_awaiting_trade", None)
-
-    await update.message.reply_text("🧠 取引内容を解析中...")
-
-    # Geminiで取引インテントを解析
-    intent = await parse_trade_intent(text)
-
-    if intent.get("error"):
-        await update.message.reply_text(
-            f"❌ {intent['error']}\n\n"
-            "もう一度入力してください。\n"
-            "例: 「XRPを1000円分買って」「BTCを0.001売って」",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return True
-
-    asset = intent.get("asset", "").lower()
-    side = intent.get("side", "")
-    amount_type = intent.get("amount_type", "")
-    amount = float(intent.get("amount", 0))
-
-    # 基本バリデーション
-    if not asset or asset not in JPY_PAIRS:
-        await update.message.reply_text(
-            f"❌ 通貨 '{asset.upper() if asset else '不明'}' はbitbankのJPYペアに対応していません。\n\n"
-            "対応通貨: BTC, ETH, XRP, XLM, LTC, DOGE, SOL など",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return True
-
-    if side not in ("buy", "sell"):
-        await update.message.reply_text(
-            "❌ 売買方向が特定できませんでした。\n「買って」または「売って」を含めて入力してください。",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return True
-
-    # 現在価格を取得
-    pair = JPY_PAIRS[asset]
-    ticker = get_ticker(pair)
-    if not ticker:
-        await update.message.reply_text(
-            f"❌ {asset.upper()} の現在価格を取得できませんでした。しばらく後に再試行してください。",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return True
-
-    try:
-        price_jpy = float(ticker.get("last", 0))
-        ask_price = float(ticker.get("sell", price_jpy))  # 買い板最安値
-        bid_price = float(ticker.get("buy", price_jpy))   # 売り板最高値
-    except (ValueError, TypeError):
-        await update.message.reply_text(
-            f"❌ {asset.upper()} の価格データが不正です。",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return True
-
-    # 実際の注文数量を計算
-    if amount_type == "jpy":
-        # JPY金額 → 数量に変換
-        ref_price = ask_price if side == "buy" else bid_price
-        if ref_price <= 0:
-            await update.message.reply_text("❌ 価格が0円のため計算できません。", reply_markup=MENU_KEYBOARD)
-            return True
-        actual_quantity = amount / ref_price
-        actual_jpy = amount
-
-    elif amount_type == "all":
-        # 全量売り（利用可能残高を取得）
-        if side != "sell":
-            await update.message.reply_text("❌ 「全部」は売り注文にのみ対応しています。", reply_markup=MENU_KEYBOARD)
-            return True
-        free_amount = get_asset_free_amount(asset)
-        if free_amount is None or free_amount <= 0:
-            await update.message.reply_text(
-                f"❌ {asset.upper()} の利用可能残高がありません。",
-                reply_markup=MENU_KEYBOARD,
-            )
-            return True
-        actual_quantity = free_amount
-        actual_jpy = actual_quantity * bid_price
-
-    else:
-        # 数量指定
-        actual_quantity = amount
-        actual_jpy = actual_quantity * (ask_price if side == "buy" else bid_price)
-
-    # 最小注文数量チェック（概算）
-    if actual_quantity <= 0:
-        await update.message.reply_text(
-            "❌ 注文数量が0以下です。金額または数量を確認してください。",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return True
-
-    # 確認メッセージを生成して保存
-    confirmation_msg = _format_trade_confirmation(
-        asset, side, amount_type, amount, price_jpy, actual_quantity, actual_jpy
-    )
-
-    # 注文情報をコンテキストに保存
-    context.user_data["crypto_pending_order"] = {
-        "asset": asset,
-        "side": side,
-        "quantity": actual_quantity,
-        "price_jpy": price_jpy,
-        "estimated_jpy": actual_jpy,
-        "original_text": text,
-    }
-
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ 注文を実行する", callback_data="crypto:order_confirm"),
-            InlineKeyboardButton("❌ キャンセル", callback_data="crypto:order_cancel"),
-        ]
-    ]
-    await update.message.reply_text(
-        confirmation_msg,
+        "bitbank の保有資産を確認できます。",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    return True
 
 
 async def handle_crypto_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2246,7 +1960,6 @@ async def handle_crypto_callback(update: Update, context: ContextTypes.DEFAULT_T
             keyboard = [
                 [
                     InlineKeyboardButton("🔄 更新", callback_data="crypto:portfolio"),
-                    InlineKeyboardButton("💱 取引する", callback_data="crypto:trade_input"),
                 ],
             ]
             await query.edit_message_text(
@@ -2260,20 +1973,6 @@ async def handle_crypto_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"エラー: {str(e)[:200]}\n\n"
                 "BITBANK_API_KEY と BITBANK_API_SECRET が正しく設定されているか確認してください。"
             )
-
-    # ─── 取引入力モードへ ─────────────────────────────────────
-    elif action == "trade_input":
-        context.user_data["crypto_awaiting_trade"] = True
-        await query.edit_message_text(
-            "💱 【取引入力】\n\n"
-            "取引内容を自然言語で入力してください。\n\n"
-            "例:\n"
-            "・「XRPを1000円分買って」\n"
-            "・「BTCを0.001売って」\n"
-            "・「XLMを全部売って」\n"
-            "・「ETHを5000円買いたい」\n\n"
-            "⚠️ 注文前に確認画面が表示されます。"
-        )
 
     # ─── 注文実行（確認後） ───────────────────────────────────
     elif action == "order_confirm":
@@ -2374,9 +2073,7 @@ async def handle_agent_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text(
         "🤖 【エージェント】\n\n"
         "NotionシフトDBをマスタとして\n"
-        "キャスカン・エスたまへの同期を管理します。\n\n"
-        "💡 自然言語でも操作できます:\n"
-        "例: 『明日りおんを14時から23時でキャスカンに登録して』",
+        "キャスカン・エスたまへの同期を管理します。",
         reply_markup=reply_markup,
     )
 
@@ -2511,42 +2208,6 @@ async def handle_agent_confirm_callback(update: Update, context: ContextTypes.DE
             await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
 
 
-async def handle_agent_nlp_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """エージェント自然言語操作の確認コールバック"""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data
-    if not data.startswith("agent_nlp:"):
-        return
-
-    action = data.replace("agent_nlp:", "")
-
-    if action == "cancel":
-        context.user_data.pop("agent_pending_action", None)
-        await query.edit_message_text("❌ 操作をキャンセルしました。")
-        return
-
-    if action == "execute":
-        pending = context.user_data.pop("agent_pending_action", None)
-        if not pending:
-            await query.edit_message_text("⚠️ 実行する操作が見つかりません。")
-            return
-
-        await query.edit_message_text("⏳ ブラウザで操作を実行中...\nしばらくお待ちください。")
-        try:
-            result = await browser_agent.execute_confirmed(pending)
-            if len(result) > 4000:
-                chunks = _split_text(result, 3800)
-                await query.edit_message_text(chunks[0])
-                for chunk in chunks[1:]:
-                    await query.message.chat.send_message(chunk)
-            else:
-                await query.edit_message_text(result)
-        except Exception as e:
-            await query.edit_message_text(f"❌ エラー: {str(e)[:300]}")
-
-
 # ─── 掲載ページ確認 ──────────────────────────────────────────────────────
 MEDIA_LISTING_PAGES = [
     {"name": "公式HP", "url": "https://zenryoku-esthe.com"},
@@ -2665,14 +2326,6 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ"""
-    text = update.message.text.strip() if update.message.text else ""
-
-    # 仮想通貨取引入力待ち
-    if context.user_data.get("crypto_awaiting_trade"):
-        handled = await handle_crypto_trade_text(update, context)
-        if handled:
-            return
-
     # 新カテゴリ名入力待ち
     if context.user_data.get("photo_save_awaiting_name"):
         await handle_photo_name_text(update, context)
@@ -2858,7 +2511,6 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_crypto_callback, pattern=r"^crypto:"))
     app.add_handler(CallbackQueryHandler(handle_agent_callback, pattern=r"^agent:"))
     app.add_handler(CallbackQueryHandler(handle_agent_confirm_callback, pattern=r"^agent_confirm:"))
-    app.add_handler(CallbackQueryHandler(handle_agent_nlp_confirm_callback, pattern=r"^agent_nlp:"))
     app.add_handler(CallbackQueryHandler(handle_attach_post_callback, pattern=r"^attach_post:"))
 
     # その他のテキストメッセージ（最後に登録）
