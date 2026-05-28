@@ -445,6 +445,55 @@ class EstamaBrowser:
             logger.error(f"アピール実行エラー: {e}")
             return {"success": False, "message": f"エラー: {str(e)}"}
 
+    async def click_guest_appeals(self) -> dict:
+        """
+        /admin/guest/appeal/ の「店舗情報」「クーポン情報」「お店体験談」
+        アピールボタンを順番にクリックする。
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました"}
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/guest/appeal/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            targets = ["店舗情報", "クーポン情報", "お店体験談"]
+            clicked = []
+            failed = []
+
+            for label in targets:
+                # 各カテゴリ行の中にあるアピールボタンを探す
+                # 行要素 (tr/div/li) に label テキストが含まれ、その中のボタン/リンク
+                btn = page.locator(
+                    f'tr:has-text("{label}") a:has-text("アピール"), '
+                    f'tr:has-text("{label}") button:has-text("アピール"), '
+                    f'div:has-text("{label}") a:has-text("アピール"), '
+                    f'div:has-text("{label}") button:has-text("アピール"), '
+                    f'li:has-text("{label}") a:has-text("アピール"), '
+                    f'li:has-text("{label}") button:has-text("アピール")'
+                ).first
+                if await btn.count() > 0:
+                    await btn.click()
+                    await page.wait_for_timeout(1500)
+                    clicked.append(label)
+                    logger.info(f"アピール成功: {label}")
+                else:
+                    failed.append(label)
+                    logger.warning(f"アピールボタン未検出: {label}")
+
+            if clicked:
+                msg = f"アピール完了: {', '.join(clicked)}"
+                if failed:
+                    msg += f"（未検出: {', '.join(failed)}）"
+                return {"success": True, "message": msg, "clicked": clicked, "failed": failed}
+            else:
+                return {"success": False, "message": "アピールボタンが1つも見つかりませんでした", "clicked": [], "failed": failed}
+
+        except Exception as e:
+            logger.error(f"ゲストアピール実行エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}"}
+
     # ─── シフト同期（キャスカン → エスたま） ─────────────────
 
     async def sync_from_caskan(self, caskan_shifts: list) -> dict:
