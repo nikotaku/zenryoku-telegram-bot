@@ -564,6 +564,126 @@ class EstamaBrowser:
             logger.error(f"セラピストアピール実行エラー: {e}")
             return {"success": False, "message": f"エラー: {str(e)}"}
 
+    async def update_schedule_status(self, now_min: Optional[int] = None) -> dict:
+        """
+        /admin/schedule/ を巡回し、現在時刻より前の時間帯で〇（受付可）の
+        ものを×（受付不可）に変更する（過去のみ・一方向）。
+
+        Args:
+            now_min: 営業日基準の現在分（None なら JST 現在時刻から算出）。
+                     0:00〜5:59 は深夜営業として +24h 換算する。
+
+        Returns:
+            {"success": bool, "message": str, "changed": [str]}
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました", "changed": []}
+
+        # 営業日基準の現在分を算出
+        if now_min is None:
+            now = datetime.now()
+            now_min = now.hour * 60 + now.minute
+            if now.hour < 6:
+                now_min += 24 * 60
+
+        # 過去の〇を1つ見つけてクリックし、その情報を返す JS
+        # DOM 再描画に強いよう、毎回フレッシュに走査する
+        click_js = r"""(nowMin) => {
+            const AVAIL = ['〇', '○', '◯', '◎'];
+            function toBizMin(h, m) {
+                let t = h * 60 + m;
+                if (h < 6) t += 24 * 60;  // 深夜営業換算
+                return t;
+            }
+            // セル要素のテキストから時刻を推定
+            function timeFromText(t) {
+                if (!t) return null;
+                let m = t.match(/(\d{1,2}):(\d{2})/);
+                if (m) return toBizMin(parseInt(m[1], 10), parseInt(m[2], 10));
+                m = t.match(/(\d{1,2})\s*時/);
+                if (m) return toBizMin(parseInt(m[1], 10), 0);
+                return null;
+            }
+            // クリック候補（〇マークを持つ小さな要素）
+            const nodes = Array.from(document.querySelectorAll('a, button, td, span, label, div'));
+            for (const el of nodes) {
+                const txt = (el.textContent || '').trim();
+                if (txt.length > 4) continue;            // マーク単体のみ
+                if (!AVAIL.some(a => txt === a)) continue;
+
+                // この要素の時間帯を特定する
+                let slotMin = null;
+                // 1) 自身/祖先の data 属性
+                let p = el;
+                for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+                    for (const attr of ['data-time', 'data-hour', 'data-slot']) {
+                        const v = p.getAttribute && p.getAttribute(attr);
+                        const tm = timeFromText(v);
+                        if (tm !== null) { slotMin = tm; break; }
+                    }
+                    if (slotMin !== null) break;
+                }
+                // 2) テーブル列ヘッダーから
+                if (slotMin === null) {
+                    const td = el.closest('td, th');
+                    if (td && td.parentElement) {
+                        const idx = Array.prototype.indexOf.call(td.parentElement.children, td);
+                        const table = el.closest('table');
+                        if (table) {
+                            const headRow = table.querySelector('thead tr') || table.querySelector('tr');
+                            if (headRow && headRow.children[idx]) {
+                                slotMin = timeFromText(headRow.children[idx].textContent);
+                            }
+                        }
+                    }
+                }
+                if (slotMin === null) continue;          // 時刻不明はスキップ（安全側）
+                if (slotMin >= nowMin) continue;          // 過去のみ対象
+
+                // セラピスト名（行頭セル）
+                let name = '';
+                const row = el.closest('tr');
+                if (row && row.children.length) {
+                    name = (row.children[0].textContent || '').trim().slice(0, 20);
+                }
+
+                // クリックして×に変更
+                el.click();
+                const hh = Math.floor((slotMin % (24 * 60)) / 60);
+                const mm = slotMin % 60;
+                return { name: name, time: ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2) };
+            }
+            return null;
+        }"""
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/schedule/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            changed = []
+            # 過去の〇が無くなるまで1つずつ処理（最大60回）
+            for _ in range(60):
+                result = await page.evaluate(click_js, now_min)
+                if not result:
+                    break
+                label = f"{result.get('name', '')} {result.get('time', '')}".strip()
+                changed.append(label)
+                logger.info(f"スケジュール更新: {label} 〇→×")
+                await page.wait_for_timeout(1200)  # Ajax反映待ち・連投防止
+
+            if changed:
+                return {
+                    "success": True,
+                    "message": f"{len(changed)}件を〇→×に更新: " + ", ".join(changed),
+                    "changed": changed,
+                }
+            return {"success": True, "message": "更新対象（過去の〇）はありませんでした", "changed": []}
+
+        except Exception as e:
+            logger.error(f"スケジュール状況更新エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}", "changed": []}
+
     # ─── シフト同期（キャスカン → エスたま） ─────────────────
 
     async def sync_from_caskan(self, caskan_shifts: list) -> dict:

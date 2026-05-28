@@ -2278,6 +2278,7 @@ def _guidance_menu_keyboard(schedule: list) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("📣 今すぐアピール実行", callback_data="guidance:appeal")],
         [InlineKeyboardButton("💃 セラピストアピール実行", callback_data="guidance:cast_appeal")],
+        [InlineKeyboardButton("🗓️ 出勤表を今すぐ更新", callback_data="guidance:sched_update")],
         [InlineKeyboardButton("➕ スケジュール追加", callback_data="guidance:add")],
     ]
     for i, entry in enumerate(sorted(schedule, key=lambda x: x["time"])):
@@ -2344,6 +2345,22 @@ async def handle_guidance_callback(update: Update, context: ContextTypes.DEFAULT
             from estama_browser import EstamaBrowser
             browser = EstamaBrowser()
             result = await browser.click_cast_appeal()
+            await browser.close()
+            msg = result.get("message", "")
+            if result.get("success"):
+                await query.edit_message_text(f"✅ {msg}")
+            else:
+                await query.edit_message_text(f"❌ {msg}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+        return
+
+    if action == "sched_update":
+        await query.edit_message_text("⏳ 出勤表を確認し、過去の〇を×に更新中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.update_schedule_status()
             await browser.close()
             msg = result.get("message", "")
             if result.get("success"):
@@ -2529,6 +2546,38 @@ async def cast_appeal_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=f"❌ セラピストアピール自動実行エラー\n{e}",
+        )
+
+
+async def schedule_update_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エスたま出勤表の過去の〇を×に更新する（毎時0分）"""
+    jst = pytz.timezone("Asia/Tokyo")
+    now = datetime.now(jst)
+    logger.info(f"schedule_update_job 実行: {now.strftime('%H:%M')}")
+    try:
+        from estama_browser import EstamaBrowser
+        browser = EstamaBrowser()
+        result = await browser.update_schedule_status()
+        await browser.close()
+        msg = result.get("message", "")
+        changed = result.get("changed", [])
+        if result.get("success"):
+            # 変更があった時のみ通知（毎時の空振り通知は出さない）
+            if changed:
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=f"🗓️ 【出勤表 自動更新】 {now.strftime('%H:%M')}\n{msg}",
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"❌ 【出勤表 更新失敗】 {now.strftime('%H:%M')}\n{msg}",
+            )
+    except Exception as e:
+        logger.error(f"schedule_update_job エラー: {e}")
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"❌ 出勤表自動更新エラー\n{e}",
         )
 
 
@@ -2760,6 +2809,10 @@ def main() -> None:
     app.job_queue.run_daily(cast_appeal_job, time(hour=12, minute=0, tzinfo=jst))
     app.job_queue.run_daily(cast_appeal_job, time(hour=15, minute=0, tzinfo=jst))
     app.job_queue.run_daily(cast_appeal_job, time(hour=22, minute=0, tzinfo=jst))
+
+    # 出勤表の過去〇→×更新（11:00〜24:00 毎時0分 JST）
+    for _sched_h in [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0]:
+        app.job_queue.run_daily(schedule_update_job, time(hour=_sched_h, minute=0, tzinfo=jst))
 
     # ─── 経費入力 ConversationHandler ───────────────────
     expense_conv = ConversationHandler(
