@@ -494,6 +494,76 @@ class EstamaBrowser:
             logger.error(f"ゲストアピール実行エラー: {e}")
             return {"success": False, "message": f"エラー: {str(e)}"}
 
+    async def click_cast_appeal(self) -> dict:
+        """
+        /admin/cast/appeal/ のセラピストアピールを実行する。
+        手順:
+          1. 出勤が早い順で絞り込む
+          2. 一番上のセラピストにチェック
+          3. アピールボタンを押す
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました"}
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/cast/appeal/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            # 1. 出勤が早い順で絞り込む（並び替えセレクト or リンク）
+            sorted_ok = False
+            sort_select = page.locator(
+                'select[name*="sort"], select[name*="order"], select#sort, select#order'
+            )
+            if await sort_select.count() > 0:
+                options = await sort_select.first.locator("option").all()
+                for opt in options:
+                    text = (await opt.text_content() or "")
+                    if "出勤" in text and ("早" in text or "順" in text):
+                        value = await opt.get_attribute("value")
+                        await sort_select.first.select_option(value=value)
+                        await page.wait_for_timeout(2000)
+                        sorted_ok = True
+                        logger.info(f"出勤順ソート選択: {text.strip()}")
+                        break
+            if not sorted_ok:
+                sort_link = page.locator(
+                    'a:has-text("出勤が早い"), a:has-text("出勤順"), '
+                    'button:has-text("出勤が早い"), button:has-text("出勤順")'
+                ).first
+                if await sort_link.count() > 0:
+                    await sort_link.click()
+                    await page.wait_for_timeout(2000)
+                    sorted_ok = True
+                    logger.info("出勤順ソートリンクをクリック")
+            if not sorted_ok:
+                logger.warning("出勤順の絞り込みコントロールが見つかりませんでした（既定順で続行）")
+
+            # 2. 一番上のセラピストにチェック
+            checkbox = page.locator('input[type="checkbox"]').first
+            if await checkbox.count() == 0:
+                return {"success": False, "message": "セラピストのチェックボックスが見つかりません"}
+            if not await checkbox.is_checked():
+                await checkbox.check()
+            await page.wait_for_timeout(500)
+            logger.info("一番上のセラピストにチェック")
+
+            # 3. アピールボタンを押す
+            appeal_btn = page.locator(
+                'a:has-text("アピール"), button:has-text("アピール"), '
+                'input[type="submit"][value*="アピール"], .appeal-btn'
+            ).first
+            if await appeal_btn.count() == 0:
+                return {"success": False, "message": "アピールボタンが見つかりません"}
+            await appeal_btn.click()
+            await page.wait_for_timeout(2000)
+
+            return {"success": True, "message": "セラピストアピールを実行しました（出勤が早い順・一番上）"}
+
+        except Exception as e:
+            logger.error(f"セラピストアピール実行エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}"}
+
     # ─── シフト同期（キャスカン → エスたま） ─────────────────
 
     async def sync_from_caskan(self, caskan_shifts: list) -> dict:

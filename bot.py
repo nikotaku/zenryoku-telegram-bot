@@ -2277,6 +2277,7 @@ def _guidance_menu_keyboard(schedule: list) -> InlineKeyboardMarkup:
             InlineKeyboardButton("▶️ ご案内終了", callback_data="guidance:run:ended"),
         ],
         [InlineKeyboardButton("📣 今すぐアピール実行", callback_data="guidance:appeal")],
+        [InlineKeyboardButton("💃 セラピストアピール実行", callback_data="guidance:cast_appeal")],
         [InlineKeyboardButton("➕ スケジュール追加", callback_data="guidance:add")],
     ]
     for i, entry in enumerate(sorted(schedule, key=lambda x: x["time"])):
@@ -2327,6 +2328,22 @@ async def handle_guidance_callback(update: Update, context: ContextTypes.DEFAULT
             from estama_browser import EstamaBrowser
             browser = EstamaBrowser()
             result = await browser.click_guest_appeals()
+            await browser.close()
+            msg = result.get("message", "")
+            if result.get("success"):
+                await query.edit_message_text(f"✅ {msg}")
+            else:
+                await query.edit_message_text(f"❌ {msg}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+        return
+
+    if action == "cast_appeal":
+        await query.edit_message_text("⏳ エスたまでセラピストアピールを実行中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.click_cast_appeal()
             await browser.close()
             msg = result.get("message", "")
             if result.get("success"):
@@ -2488,6 +2505,30 @@ async def appeal_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=f"❌ アピール自動実行エラー\n{e}",
+        )
+
+
+async def cast_appeal_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エスたまセラピストアピールを自動実行する（12:00, 15:00, 22:00）"""
+    jst = pytz.timezone("Asia/Tokyo")
+    now = datetime.now(jst)
+    logger.info(f"cast_appeal_job 実行: {now.strftime('%H:%M')}")
+    try:
+        from estama_browser import EstamaBrowser
+        browser = EstamaBrowser()
+        result = await browser.click_cast_appeal()
+        await browser.close()
+        msg = result.get("message", "")
+        if result.get("success"):
+            text = f"💃 【セラピストアピール完了】 {now.strftime('%H:%M')}\n{msg}"
+        else:
+            text = f"❌ 【セラピストアピール失敗】 {now.strftime('%H:%M')}\n{msg}"
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+    except Exception as e:
+        logger.error(f"cast_appeal_job エラー: {e}")
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"❌ セラピストアピール自動実行エラー\n{e}",
         )
 
 
@@ -2710,10 +2751,15 @@ def main() -> None:
     from datetime import timedelta
     app.job_queue.run_repeating(guidance_check_job, interval=timedelta(minutes=1), first=10)
 
-    # アピール自動実行（14:00, 19:00, 23:00 JST）
+    # ゲストアピール自動実行（14:00, 19:00, 23:00 JST）
     app.job_queue.run_daily(appeal_job, time(hour=14, minute=0, tzinfo=jst))
     app.job_queue.run_daily(appeal_job, time(hour=19, minute=0, tzinfo=jst))
     app.job_queue.run_daily(appeal_job, time(hour=23, minute=0, tzinfo=jst))
+
+    # セラピストアピール自動実行（12:00, 15:00, 22:00 JST）
+    app.job_queue.run_daily(cast_appeal_job, time(hour=12, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(cast_appeal_job, time(hour=15, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(cast_appeal_job, time(hour=22, minute=0, tzinfo=jst))
 
     # ─── 経費入力 ConversationHandler ───────────────────
     expense_conv = ConversationHandler(
