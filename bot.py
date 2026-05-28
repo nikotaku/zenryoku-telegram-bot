@@ -2276,6 +2276,10 @@ def _guidance_menu_keyboard(schedule: list) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("▶️ ご案内終了", callback_data="guidance:run:ended"),
         ],
+        [InlineKeyboardButton("📣 今すぐアピール実行", callback_data="guidance:appeal")],
+        [InlineKeyboardButton("💃 セラピストアピール実行", callback_data="guidance:cast_appeal")],
+        [InlineKeyboardButton("🗓️ 出勤表を今すぐ更新", callback_data="guidance:sched_update")],
+        [InlineKeyboardButton("🔍 出勤表HTML確認(デバッグ)", callback_data="guidance:sched_debug")],
         [InlineKeyboardButton("➕ スケジュール追加", callback_data="guidance:add")],
     ]
     for i, entry in enumerate(sorted(schedule, key=lambda x: x["time"])):
@@ -2318,6 +2322,85 @@ async def handle_guidance_callback(update: Update, context: ContextTypes.DEFAULT
     action = parts[1]
 
     if action == "noop":
+        return
+
+    if action == "appeal":
+        await query.edit_message_text("⏳ エスたまでアピールを実行中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.click_guest_appeals()
+            await browser.close()
+            msg = result.get("message", "")
+            if result.get("success"):
+                await query.edit_message_text(f"✅ {msg}")
+            else:
+                await query.edit_message_text(f"❌ {msg}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+        return
+
+    if action == "cast_appeal":
+        await query.edit_message_text("⏳ エスたまでセラピストアピールを実行中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.click_cast_appeal()
+            await browser.close()
+            msg = result.get("message", "")
+            if result.get("success"):
+                await query.edit_message_text(f"✅ {msg}")
+            else:
+                await query.edit_message_text(f"❌ {msg}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+        return
+
+    if action == "sched_update":
+        await query.edit_message_text("⏳ 出勤表を確認し、過去の〇を×に更新中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.update_schedule_status()
+            await browser.close()
+            msg = result.get("message", "")
+            if result.get("success"):
+                await query.edit_message_text(f"✅ {msg}")
+            else:
+                await query.edit_message_text(f"❌ {msg}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+        return
+
+    if action == "sched_debug":
+        await query.edit_message_text("⏳ 出勤表ページのHTML・スクショを取得中...")
+        try:
+            from estama_browser import EstamaBrowser
+            browser = EstamaBrowser()
+            result = await browser.dump_schedule_debug()
+            await browser.close()
+            if not result.get("success"):
+                await query.edit_message_text(f"❌ {result.get('message', '')}")
+                return
+            chat_id = query.message.chat_id
+            # スクリーンショット
+            shot = result.get("screenshot", "")
+            if shot and os.path.exists(shot):
+                with open(shot, "rb") as f:
+                    await context.bot.send_photo(chat_id=chat_id, photo=f, caption="📸 出勤表ページ")
+            # HTML をファイルとして送信
+            html = result.get("html", "")
+            if html:
+                import io
+                buf = io.BytesIO(html.encode("utf-8"))
+                buf.name = "schedule.html"
+                await context.bot.send_document(
+                    chat_id=chat_id, document=buf, filename="schedule.html",
+                    caption="🔍 出勤表テーブルのHTML（このファイルを開発者に共有してください）",
+                )
+            await query.edit_message_text("✅ 出勤表ページのHTML・スクショを送信しました。")
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
         return
 
     if action == "run":
@@ -2442,6 +2525,92 @@ async def guidance_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
                     chat_id=ADMIN_CHAT_ID,
                     text=f"❌ ご案内自動設定エラー\n時刻: {current_time} → {label}\n{e}",
                 )
+
+
+async def appeal_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エスたまゲストアピールを自動実行する（14:00, 19:00, 23:00）"""
+    jst = pytz.timezone("Asia/Tokyo")
+    now = datetime.now(jst)
+    logger.info(f"appeal_job 実行: {now.strftime('%H:%M')}")
+    try:
+        from estama_browser import EstamaBrowser
+        browser = EstamaBrowser()
+        result = await browser.click_guest_appeals()
+        await browser.close()
+        msg = result.get("message", "")
+        clicked = result.get("clicked", [])
+        failed = result.get("failed", [])
+        if result.get("success"):
+            text = f"📣 【アピール完了】 {now.strftime('%H:%M')}\n"
+            if clicked:
+                text += f"成功: {', '.join(clicked)}\n"
+            if failed:
+                text += f"未検出: {', '.join(failed)}"
+        else:
+            text = f"❌ 【アピール失敗】 {now.strftime('%H:%M')}\n{msg}"
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+    except Exception as e:
+        logger.error(f"appeal_job エラー: {e}")
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"❌ アピール自動実行エラー\n{e}",
+        )
+
+
+async def cast_appeal_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エスたまセラピストアピールを自動実行する（12:00, 15:00, 22:00）"""
+    jst = pytz.timezone("Asia/Tokyo")
+    now = datetime.now(jst)
+    logger.info(f"cast_appeal_job 実行: {now.strftime('%H:%M')}")
+    try:
+        from estama_browser import EstamaBrowser
+        browser = EstamaBrowser()
+        result = await browser.click_cast_appeal()
+        await browser.close()
+        msg = result.get("message", "")
+        if result.get("success"):
+            text = f"💃 【セラピストアピール完了】 {now.strftime('%H:%M')}\n{msg}"
+        else:
+            text = f"❌ 【セラピストアピール失敗】 {now.strftime('%H:%M')}\n{msg}"
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+    except Exception as e:
+        logger.error(f"cast_appeal_job エラー: {e}")
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"❌ セラピストアピール自動実行エラー\n{e}",
+        )
+
+
+async def schedule_update_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """エスたま出勤表の過去の〇を×に更新する（毎時0分）"""
+    jst = pytz.timezone("Asia/Tokyo")
+    now = datetime.now(jst)
+    logger.info(f"schedule_update_job 実行: {now.strftime('%H:%M')}")
+    try:
+        from estama_browser import EstamaBrowser
+        browser = EstamaBrowser()
+        result = await browser.update_schedule_status()
+        await browser.close()
+        msg = result.get("message", "")
+        changed = result.get("changed", [])
+        if result.get("success"):
+            # 変更があった時のみ通知（毎時の空振り通知は出さない）
+            if changed:
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=f"🗓️ 【出勤表 自動更新】 {now.strftime('%H:%M')}\n{msg}",
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"❌ 【出勤表 更新失敗】 {now.strftime('%H:%M')}\n{msg}",
+            )
+    except Exception as e:
+        logger.error(f"schedule_update_job エラー: {e}")
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"❌ 出勤表自動更新エラー\n{e}",
+        )
 
 
 # ─── 各種管理画面 ─────────────────────────────────────────────────────────
@@ -2662,6 +2831,20 @@ def main() -> None:
     # ご案内状況 自動設定（毎分チェック）
     from datetime import timedelta
     app.job_queue.run_repeating(guidance_check_job, interval=timedelta(minutes=1), first=10)
+
+    # ゲストアピール自動実行（14:00, 19:00, 23:00 JST）
+    app.job_queue.run_daily(appeal_job, time(hour=14, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(appeal_job, time(hour=19, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(appeal_job, time(hour=23, minute=0, tzinfo=jst))
+
+    # セラピストアピール自動実行（12:00, 15:00, 22:00 JST）
+    app.job_queue.run_daily(cast_appeal_job, time(hour=12, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(cast_appeal_job, time(hour=15, minute=0, tzinfo=jst))
+    app.job_queue.run_daily(cast_appeal_job, time(hour=22, minute=0, tzinfo=jst))
+
+    # 出勤表の過去〇→×更新（11:00〜24:00 毎時0分 JST）
+    for _sched_h in [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0]:
+        app.job_queue.run_daily(schedule_update_job, time(hour=_sched_h, minute=0, tzinfo=jst))
 
     # ─── 経費入力 ConversationHandler ───────────────────
     expense_conv = ConversationHandler(

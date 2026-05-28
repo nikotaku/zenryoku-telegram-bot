@@ -445,6 +445,295 @@ class EstamaBrowser:
             logger.error(f"アピール実行エラー: {e}")
             return {"success": False, "message": f"エラー: {str(e)}"}
 
+    async def click_guest_appeals(self) -> dict:
+        """
+        /admin/guest/appeal/ の「店舗情報」「クーポン情報」「お店体験談」
+        アピールボタンを順番にクリックする。
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました"}
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/guest/appeal/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            targets = ["店舗情報", "クーポン情報", "お店体験談"]
+            clicked = []
+            failed = []
+
+            for label in targets:
+                # 各カテゴリ行の中にあるアピールボタンを探す
+                # 行要素 (tr/div/li) に label テキストが含まれ、その中のボタン/リンク
+                btn = page.locator(
+                    f'tr:has-text("{label}") a:has-text("アピール"), '
+                    f'tr:has-text("{label}") button:has-text("アピール"), '
+                    f'div:has-text("{label}") a:has-text("アピール"), '
+                    f'div:has-text("{label}") button:has-text("アピール"), '
+                    f'li:has-text("{label}") a:has-text("アピール"), '
+                    f'li:has-text("{label}") button:has-text("アピール")'
+                ).first
+                if await btn.count() > 0:
+                    await btn.click()
+                    await page.wait_for_timeout(1500)
+                    clicked.append(label)
+                    logger.info(f"アピール成功: {label}")
+                else:
+                    failed.append(label)
+                    logger.warning(f"アピールボタン未検出: {label}")
+
+            if clicked:
+                msg = f"アピール完了: {', '.join(clicked)}"
+                if failed:
+                    msg += f"（未検出: {', '.join(failed)}）"
+                return {"success": True, "message": msg, "clicked": clicked, "failed": failed}
+            else:
+                return {"success": False, "message": "アピールボタンが1つも見つかりませんでした", "clicked": [], "failed": failed}
+
+        except Exception as e:
+            logger.error(f"ゲストアピール実行エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}"}
+
+    async def click_cast_appeal(self) -> dict:
+        """
+        /admin/cast/appeal/ のセラピストアピールを実行する。
+        手順:
+          1. 出勤が早い順で絞り込む
+          2. 一番上のセラピストにチェック
+          3. アピールボタンを押す
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました"}
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/cast/appeal/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            # 1. 出勤が早い順で絞り込む（並び替えセレクト or リンク）
+            sorted_ok = False
+            sort_select = page.locator(
+                'select[name*="sort"], select[name*="order"], select#sort, select#order'
+            )
+            if await sort_select.count() > 0:
+                options = await sort_select.first.locator("option").all()
+                for opt in options:
+                    text = (await opt.text_content() or "")
+                    if "出勤" in text and ("早" in text or "順" in text):
+                        value = await opt.get_attribute("value")
+                        await sort_select.first.select_option(value=value)
+                        await page.wait_for_timeout(2000)
+                        sorted_ok = True
+                        logger.info(f"出勤順ソート選択: {text.strip()}")
+                        break
+            if not sorted_ok:
+                sort_link = page.locator(
+                    'a:has-text("出勤が早い"), a:has-text("出勤順"), '
+                    'button:has-text("出勤が早い"), button:has-text("出勤順")'
+                ).first
+                if await sort_link.count() > 0:
+                    await sort_link.click()
+                    await page.wait_for_timeout(2000)
+                    sorted_ok = True
+                    logger.info("出勤順ソートリンクをクリック")
+            if not sorted_ok:
+                logger.warning("出勤順の絞り込みコントロールが見つかりませんでした（既定順で続行）")
+
+            # 2. 一番上のセラピストにチェック
+            checkbox = page.locator('input[type="checkbox"]').first
+            if await checkbox.count() == 0:
+                return {"success": False, "message": "セラピストのチェックボックスが見つかりません"}
+            if not await checkbox.is_checked():
+                await checkbox.check()
+            await page.wait_for_timeout(500)
+            logger.info("一番上のセラピストにチェック")
+
+            # 3. アピールボタンを押す
+            appeal_btn = page.locator(
+                'a:has-text("アピール"), button:has-text("アピール"), '
+                'input[type="submit"][value*="アピール"], .appeal-btn'
+            ).first
+            if await appeal_btn.count() == 0:
+                return {"success": False, "message": "アピールボタンが見つかりません"}
+            await appeal_btn.click()
+            await page.wait_for_timeout(2000)
+
+            return {"success": True, "message": "セラピストアピールを実行しました（出勤が早い順・一番上）"}
+
+        except Exception as e:
+            logger.error(f"セラピストアピール実行エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}"}
+
+    async def update_schedule_status(self, now_min: Optional[int] = None) -> dict:
+        """
+        /admin/schedule/ を巡回し、現在時刻より前の時間帯で〇（受付可）の
+        ものを×（受付不可）に変更する（過去のみ・一方向）。
+
+        Args:
+            now_min: 営業日基準の現在分（None なら JST 現在時刻から算出）。
+                     0:00〜5:59 は深夜営業として +24h 換算する。
+
+        Returns:
+            {"success": bool, "message": str, "changed": [str]}
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました", "changed": []}
+
+        # 営業日基準の現在分を算出
+        if now_min is None:
+            now = datetime.now()
+            now_min = now.hour * 60 + now.minute
+            if now.hour < 6:
+                now_min += 24 * 60
+
+        # 過去の〇を1つ見つけてクリックし、その情報を返す JS
+        # DOM 再描画に強いよう、毎回フレッシュに走査する
+        click_js = r"""(nowMin) => {
+            const AVAIL = ['〇', '○', '◯', '◎'];
+            function toBizMin(h, m) {
+                let t = h * 60 + m;
+                if (h < 6) t += 24 * 60;  // 深夜営業換算
+                return t;
+            }
+            // セル要素のテキストから時刻を推定
+            function timeFromText(t) {
+                if (!t) return null;
+                let m = t.match(/(\d{1,2}):(\d{2})/);
+                if (m) return toBizMin(parseInt(m[1], 10), parseInt(m[2], 10));
+                m = t.match(/(\d{1,2})\s*時/);
+                if (m) return toBizMin(parseInt(m[1], 10), 0);
+                return null;
+            }
+            // クリック候補（〇マークを持つ小さな要素）
+            const nodes = Array.from(document.querySelectorAll('a, button, td, span, label, div'));
+            for (const el of nodes) {
+                const txt = (el.textContent || '').trim();
+                if (txt.length > 4) continue;            // マーク単体のみ
+                if (!AVAIL.some(a => txt === a)) continue;
+
+                // この要素の時間帯を特定する
+                let slotMin = null;
+                // 1) 自身/祖先の data 属性
+                let p = el;
+                for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+                    for (const attr of ['data-time', 'data-hour', 'data-slot']) {
+                        const v = p.getAttribute && p.getAttribute(attr);
+                        const tm = timeFromText(v);
+                        if (tm !== null) { slotMin = tm; break; }
+                    }
+                    if (slotMin !== null) break;
+                }
+                // 2) テーブル列ヘッダーから
+                if (slotMin === null) {
+                    const td = el.closest('td, th');
+                    if (td && td.parentElement) {
+                        const idx = Array.prototype.indexOf.call(td.parentElement.children, td);
+                        const table = el.closest('table');
+                        if (table) {
+                            const headRow = table.querySelector('thead tr') || table.querySelector('tr');
+                            if (headRow && headRow.children[idx]) {
+                                slotMin = timeFromText(headRow.children[idx].textContent);
+                            }
+                        }
+                    }
+                }
+                if (slotMin === null) continue;          // 時刻不明はスキップ（安全側）
+                if (slotMin >= nowMin) continue;          // 過去のみ対象
+
+                // セラピスト名（行頭セル）
+                let name = '';
+                const row = el.closest('tr');
+                if (row && row.children.length) {
+                    name = (row.children[0].textContent || '').trim().slice(0, 20);
+                }
+
+                // クリックして×に変更
+                el.click();
+                const hh = Math.floor((slotMin % (24 * 60)) / 60);
+                const mm = slotMin % 60;
+                return { name: name, time: ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2) };
+            }
+            return null;
+        }"""
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/schedule/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            changed = []
+            # 過去の〇が無くなるまで1つずつ処理（最大60回）
+            for _ in range(60):
+                result = await page.evaluate(click_js, now_min)
+                if not result:
+                    break
+                label = f"{result.get('name', '')} {result.get('time', '')}".strip()
+                changed.append(label)
+                logger.info(f"スケジュール更新: {label} 〇→×")
+                await page.wait_for_timeout(1200)  # Ajax反映待ち・連投防止
+
+            if changed:
+                return {
+                    "success": True,
+                    "message": f"{len(changed)}件を〇→×に更新: " + ", ".join(changed),
+                    "changed": changed,
+                }
+            return {"success": True, "message": "更新対象（過去の〇）はありませんでした", "changed": []}
+
+        except Exception as e:
+            logger.error(f"スケジュール状況更新エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}", "changed": []}
+
+    async def dump_schedule_debug(self, screenshot_path: str = "/tmp/estama_schedule.png") -> dict:
+        """
+        デバッグ用: 出勤表ページのスクリーンショットと主要HTMLを取得する。
+        セレクタ調整のため、構造把握に使う。
+
+        Returns:
+            {"success": bool, "screenshot": str, "html": str, "message": str}
+        """
+        if not await self._ensure_login():
+            return {"success": False, "message": "ログインに失敗しました", "screenshot": "", "html": ""}
+
+        try:
+            page = self._page
+            await page.goto(f"{ADMIN_URL}/schedule/", wait_until="networkidle", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            try:
+                await page.screenshot(path=screenshot_path, full_page=True)
+            except Exception as se:
+                logger.warning(f"スクショ取得失敗: {se}")
+                screenshot_path = ""
+
+            # 〇/× を含むテーブル（なければ最大のテーブル/body）のHTMLを抽出
+            html = await page.evaluate(r"""() => {
+                const marks = ['〇', '○', '◯', '◎', '×', '✕', '✖'];
+                const tables = Array.from(document.querySelectorAll('table'));
+                let best = null, bestScore = -1;
+                for (const t of tables) {
+                    const txt = t.textContent || '';
+                    const score = marks.reduce((s, m) => s + (txt.split(m).length - 1), 0);
+                    if (score > bestScore) { bestScore = score; best = t; }
+                }
+                const el = (best && bestScore > 0) ? best : (tables[0] || document.body);
+                let h = el.outerHTML || '';
+                // 長すぎる場合は属性把握に十分な範囲で切る
+                if (h.length > 12000) h = h.slice(0, 12000) + '\n<!-- ...truncated... -->';
+                return h;
+            }""")
+
+            return {
+                "success": True,
+                "screenshot": screenshot_path,
+                "html": html,
+                "message": "出勤表ページのHTML/スクショを取得しました",
+            }
+
+        except Exception as e:
+            logger.error(f"出勤表デバッグ取得エラー: {e}")
+            return {"success": False, "message": f"エラー: {str(e)}", "screenshot": "", "html": ""}
+
     # ─── シフト同期（キャスカン → エスたま） ─────────────────
 
     async def sync_from_caskan(self, caskan_shifts: list) -> dict:
