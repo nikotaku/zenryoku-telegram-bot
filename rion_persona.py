@@ -29,24 +29,62 @@ def _load_context() -> str:
     return text.strip()
 
 
+def _extract_section(header_prefix: str) -> str:
+    """指定見出し（## ...）の本文を、次の ## 見出しの手前まで切り出す。"""
+    if not CONTEXT_FILE.exists():
+        return ""
+    text = CONTEXT_FILE.read_text(encoding="utf-8")
+    idx = text.find(header_prefix)
+    if idx == -1:
+        return ""
+    newline = text.find("\n", idx)
+    body = text[newline + 1:] if newline != -1 else ""
+    # 次の "## " 見出しが来たらそこまで
+    out_lines = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            break
+        if line.strip().startswith("<!--"):
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
 def load_articles() -> list[str]:
     """参考記事セクションから記事テキストをリストで返す（--- 区切り）。"""
-    if not CONTEXT_FILE.exists():
-        return []
-    text = CONTEXT_FILE.read_text(encoding="utf-8")
-    # "## 参考記事" 以降を切り出す（ヘッダ行自体は除く）
-    marker = "## 参考記事"
-    idx = text.find(marker)
-    if idx == -1:
-        return []
-    newline = text.find("\n", idx)
-    section = text[newline + 1:] if newline != -1 else ""
-    # HTMLコメント行を除去
-    lines = [l for l in section.splitlines() if not l.strip().startswith("<!--")]
-    section = "\n".join(lines)
-    # --- で区切って各記事に分割
-    articles = [a.strip() for a in section.split("---") if a.strip()]
-    return articles
+    section = _extract_section("## 参考記事")
+    return [a.strip() for a in section.split("---") if a.strip()]
+
+
+def load_rt_accounts() -> list[str]:
+    """RT対象アカウントセクションから @ユーザー名を抽出して返す（@は除く）。
+    "@account" でも "https://x.com/account" でも可。
+    """
+    import re
+    section = _extract_section("## RT対象アカウント")
+    names: list[str] = []
+    for line in section.splitlines():
+        line = line.strip().lstrip("-").strip()
+        if not line:
+            continue
+        # URL形式
+        m = re.search(r"(?:x\.com|twitter\.com)/([A-Za-z0-9_]+)", line)
+        if m:
+            names.append(m.group(1))
+            continue
+        # @ユーザー名 / 素のユーザー名
+        token = line.lstrip("@").split()[0] if line.split() else ""
+        if re.fullmatch(r"[A-Za-z0-9_]{1,15}", token):
+            names.append(token)
+    # 重複除去（順序維持・大文字小文字無視）
+    seen = set()
+    out = []
+    for n in names:
+        key = n.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+    return out
 
 
 def generate_post_from_article(article: str) -> str:
