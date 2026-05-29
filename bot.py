@@ -1556,9 +1556,16 @@ async def cmd_wipe_tweets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         import asyncio
         from delete_all_tweets import _client, fetch_all_tweet_ids
-        client = _client()
-        me = client.get_me()
-        ids = await asyncio.to_thread(fetch_all_tweet_ids, client, me.data.id)
+
+        def _collect():
+            c = _client()
+            me = c.get_me()
+            if not me.data:
+                raise RuntimeError("get_me() failed: no data")
+            ids = fetch_all_tweet_ids(c, me.data.id)
+            return me.data.username, ids
+
+        username, ids = await asyncio.to_thread(_collect)
     except Exception as e:
         await msg.edit_text(f"❌ 集計失敗: {e}")
         return
@@ -1571,7 +1578,7 @@ async def cmd_wipe_tweets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         InlineKeyboardButton("キャンセル", callback_data="wipe_tweets:cancel"),
     ]])
     await msg.edit_text(
-        f"⚠️ @{me.data.username} の投稿済みツイート {len(ids)}件 が見つかりました。\n"
+        f"⚠️ @{username} の投稿済みツイート {len(ids)}件 が見つかりました。\n"
         "削除すると元に戻せません。本当に削除しますか？",
         reply_markup=keyboard,
     )
