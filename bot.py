@@ -70,6 +70,9 @@ from bitbank_client import (
 # ─── 設定 ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 PHOTO_CHANNEL_ID = int(os.environ.get("PHOTO_CHANNEL_ID", "-5269472642"))
+
+# アルバム（まとめ送信）バッファ: "{chat_id}:{media_group_id}" -> [file_id, ...]
+_media_group_buffer: dict = {}
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "8419641279")
 GUIDANCE_SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), "guidance_schedule.json")
 
@@ -286,13 +289,57 @@ async def handle_images(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """画像が送信された時の処理 — photo_storageのカテゴリ選択を表示"""
+    """画像が送信された時の処理 — アルバム（まとめ送信）対応"""
     if not update.message.photo:
         return
 
     file_id = update.message.photo[-1].file_id
-    context.user_data["pending_photo_file_id"] = file_id
+    media_group_id = update.message.media_group_id
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
 
+    if media_group_id:
+        # アルバム送信: バッファに溜めて3秒後にまとめて処理
+        key = f"{chat_id}:{media_group_id}"
+        if key not in _media_group_buffer:
+            _media_group_buffer[key] = []
+            context.job_queue.run_once(
+                _process_media_group_job,
+                when=3,
+                data={"key": key, "chat_id": chat_id, "user_id": user_id},
+                name=f"album_{key}",
+            )
+        _media_group_buffer[key].append(file_id)
+    else:
+        # 単枚送信: 即座にカテゴリ選択を表示
+        context.user_data["pending_photos"] = [file_id]
+        await _show_photo_category_menu(update.message.reply_text, context, 1)
+
+
+async def _process_media_group_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """アルバムバッファ収集完了後にカテゴリ選択メニューを表示"""
+    job = context.job
+    key = job.data["key"]
+    chat_id = job.data["chat_id"]
+    user_id = job.data["user_id"]
+
+    file_ids = _media_group_buffer.pop(key, [])
+    if not file_ids:
+        return
+
+    # user_data に保存
+    ud = context.application.user_data.setdefault(user_id, {})
+    ud["pending_photos"] = file_ids
+
+    await _show_photo_category_menu(
+        lambda text, **kw: context.bot.send_message(chat_id=chat_id, text=text, **kw),
+        context,
+        len(file_ids),
+    )
+
+
+async def _show_photo_category_menu(reply_fn, context, count: int) -> None:
+    """カテゴリ選択キーボードを送信する"""
     from photo_storage import get_all_names
     names = get_all_names()
 
@@ -308,8 +355,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     keyboard.append([InlineKeyboardButton("➕ 新しいカテゴリ名で保存", callback_data="photo_save:__new__")])
     keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="photo_save:cancel")])
 
-    await update.message.reply_text(
-        "📸 画像を受け取りました！\n\n保存先を選択してください:",
+    label = f"{count}枚の画像" if count > 1 else "画像"
+    await reply_fn(
+        f"📸 {label}を受け取りました！\n\n保存先を選択してください:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -523,6 +571,7 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
     data = query.data.replace("photo_save:", "")
 
     if data == "cancel":
+        context.user_data.pop("pending_photos", None)
         context.user_data.pop("pending_photo_file_id", None)
         await query.edit_message_text("❌ 写真の保存をキャンセルしました。")
         return
@@ -532,12 +581,17 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text("📝 新しいカテゴリ名を入力してください（例：りな、スクエアバナー）：")
         return
 
-    file_id = context.user_data.get("pending_photo_file_id")
-    if not file_id:
+    # pending_photos (新形式) または pending_photo_file_id (旧形式) を取得
+    file_ids = context.user_data.get("pending_photos") or []
+    if not file_ids:
+        legacy = context.user_data.get("pending_photo_file_id")
+        if legacy:
+            file_ids = [legacy]
+    if not file_ids:
         await query.edit_message_text("⚠️ 保存する画像が見つかりません。もう一度送信してください。")
         return
 
-    await _save_photo_to_storage(query.edit_message_text, context, file_id, data)
+    await _save_photos_to_storage(query.edit_message_text, context, file_ids, data)
 
 
 async def handle_photo_name_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -546,30 +600,44 @@ async def handle_photo_name_text(update: Update, context: ContextTypes.DEFAULT_T
         return
     context.user_data.pop("photo_save_awaiting_name", None)
     name = update.message.text.strip()
-    file_id = context.user_data.get("pending_photo_file_id")
-    if not file_id:
+    file_ids = context.user_data.get("pending_photos") or []
+    if not file_ids:
+        legacy = context.user_data.get("pending_photo_file_id")
+        if legacy:
+            file_ids = [legacy]
+    if not file_ids:
         await update.message.reply_text("⚠️ 保存する画像が見つかりません。もう一度送信してください。")
         return
-    await _save_photo_to_storage(update.message.reply_text, context, file_id, name)
+    await _save_photos_to_storage(update.message.reply_text, context, file_ids, name)
 
 
-async def _save_photo_to_storage(reply_fn, context, file_id: str, name: str):
-    """photo_storageに登録してチャンネルに転送"""
+async def _save_photos_to_storage(reply_fn, context, file_ids: list, name: str):
+    """複数画像を photo_storage に登録してチャンネルに転送"""
     from photo_storage import add_photo
-    add_photo(name, file_id)
+    for fid in file_ids:
+        add_photo(name, fid)
+    context.user_data.pop("pending_photos", None)
     context.user_data.pop("pending_photo_file_id", None)
 
-    # チャンネルに転送（他デバイスからも参照できるようにする）
+    # チャンネルに転送（メディアグループでまとめて送信）
     try:
-        await context.bot.send_photo(
-            chat_id=PHOTO_CHANNEL_ID,
-            photo=file_id,
-            caption=name
-        )
+        if len(file_ids) == 1:
+            await context.bot.send_photo(
+                chat_id=PHOTO_CHANNEL_ID,
+                photo=file_ids[0],
+                caption=name,
+            )
+        else:
+            from telegram import InputMediaPhoto
+            media = [InputMediaPhoto(fid, caption=name if i == 0 else None)
+                     for i, fid in enumerate(file_ids)]
+            await context.bot.send_media_group(chat_id=PHOTO_CHANNEL_ID, media=media)
     except Exception as e:
         logger.warning(f"チャンネル転送失敗: {e}")
 
-    await reply_fn(f"✅ 「{name}」に写真を保存しました！")
+    count = len(file_ids)
+    label = f"{count}枚の写真" if count > 1 else "写真"
+    await reply_fn(f"✅ 「{name}」に{label}を保存しました！")
 
 
 # ─── 写メ日記テンプレート ────────────────────────────────
