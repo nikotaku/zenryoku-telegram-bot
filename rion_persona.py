@@ -6,9 +6,12 @@ import os
 import random
 import logging
 from pathlib import Path
-import google.generativeai as genai
+import requests
 
 logger = logging.getLogger(__name__)
+
+# 使用するClaudeモデル（安価で高速なHaiku）
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 
 CONTEXT_FILE = Path(__file__).parent / "rion_context.md"
 
@@ -58,16 +61,7 @@ def generate_post_from_article(article: str) -> str:
 【記事内容】
 {article[:2000]}
 """
-    try:
-        model = _get_model()
-        response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": prompt}]}],
-            generation_config=genai.types.GenerationConfig(max_output_tokens=500),
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"記事ツイート生成エラー: {e}")
-        return ""
+    return _call_llm(prompt, max_tokens=500)
 
 # ──────────────────────────────────────────
 # ペルソナ設定
@@ -109,9 +103,33 @@ Xに投稿するツイートを書いてください。
 """
 
 
-def _get_model():
-    genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-    return genai.GenerativeModel("gemini-2.5-flash")
+def _call_llm(prompt: str, max_tokens: int = 500) -> str:
+    """Anthropic Claude API を requests で直接呼び出す。"""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY が設定されていません")
+        return ""
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return "".join(b.get("text", "") for b in data.get("content", [])).strip()
+    except Exception as e:
+        logger.error(f"Claude API エラー: {e}")
+        return ""
 
 
 # ──────────────────────────────────────────
@@ -136,18 +154,9 @@ def generate_post(post_type: str = None) -> str:
 
     prompt = POST_TYPES.get(post_type, POST_TYPES["daily"])
 
-    try:
-        ctx = _load_context()
-        context_block = f"\n\n【りおんの最近のネタ帳（参考にしてください）】\n{ctx}" if ctx else ""
-        model = _get_model()
-        response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": f"{SYSTEM_PROMPT}{context_block}\n\n【今回の投稿テーマ】{prompt}"}]}],
-            generation_config=genai.types.GenerationConfig(max_output_tokens=500),
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"投稿生成エラー: {e}")
-        return ""
+    ctx = _load_context()
+    context_block = f"\n\n【りおんの最近のネタ帳（参考にしてください）】\n{ctx}" if ctx else ""
+    return _call_llm(f"{SYSTEM_PROMPT}{context_block}\n\n【今回の投稿テーマ】{prompt}", max_tokens=500)
 
 
 def generate_reply(mention_text: str, username: str) -> str:
@@ -168,16 +177,7 @@ def generate_reply(mention_text: str, username: str) -> str:
 - 絵文字1〜2個
 - 宣伝・誘導は絶対にしない
 """
-    try:
-        model = _get_model()
-        response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": reply_prompt}]}],
-            generation_config=genai.types.GenerationConfig(max_output_tokens=100),
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"返信生成エラー: {e}")
-        return ""
+    return _call_llm(reply_prompt, max_tokens=150)
 
 
 # 仙台お客様サーチ用キーワード（自動リプ対象）
