@@ -792,28 +792,60 @@ class EstamaBrowser:
                 logger.warning(f"スクショ取得失敗: {se}")
                 screenshot_path = ""
 
-            # 〇/× を含むテーブル（なければ最大のテーブル/body）のHTMLを抽出
-            html = await page.evaluate(r"""() => {
-                const marks = ['〇', '○', '◯', '◎', '×', '✕', '✖'];
-                const tables = Array.from(document.querySelectorAll('table'));
-                let best = null, bestScore = -1;
-                for (const t of tables) {
-                    const txt = t.textContent || '';
-                    const score = marks.reduce((s, m) => s + (txt.split(m).length - 1), 0);
-                    if (score > bestScore) { bestScore = score; best = t; }
-                }
-                const el = (best && bestScore > 0) ? best : (tables[0] || document.body);
-                let h = el.outerHTML || '';
-                // 長すぎる場合は属性把握に十分な範囲で切る
-                if (h.length > 12000) h = h.slice(0, 12000) + '\n<!-- ...truncated... -->';
-                return h;
+            # セラピスト一覧（data-idx と名前）を取得
+            therapists = await page.evaluate(r"""() => {
+                const out = [];
+                document.querySelectorAll('thead th[data-idx]').forEach(th => {
+                    const idx = th.getAttribute('data-idx');
+                    const name = (th.querySelector('span') || th).textContent.trim();
+                    if (idx) out.push({ idx, name });
+                });
+                return out;
             }""")
+
+            # 最初のセラピストの編集ページ（/admin/schedule/{idx}/）の HTML を取得
+            edit_html = ""
+            edit_target = ""
+            if therapists:
+                edit_idx = therapists[0]["idx"]
+                edit_target = f"{therapists[0]['name']} (idx={edit_idx})"
+                try:
+                    await page.goto(f"{ADMIN_URL}/schedule/{edit_idx}/", wait_until="networkidle", timeout=30000)
+                    await page.wait_for_timeout(2000)
+                    try:
+                        await page.screenshot(path="/tmp/estama_schedule_edit.png", full_page=True)
+                    except Exception:
+                        pass
+                    edit_html = await page.evaluate(r"""() => {
+                        // フォーム or 最大のテーブルを優先して抽出
+                        const form = document.querySelector('form');
+                        const tables = Array.from(document.querySelectorAll('table'));
+                        let el = form;
+                        if (!el && tables.length) {
+                            el = tables.reduce((a, b) =>
+                                (b.textContent || '').length > (a.textContent || '').length ? b : a);
+                        }
+                        if (!el) el = document.body;
+                        let h = el.outerHTML || '';
+                        if (h.length > 16000) h = h.slice(0, 16000) + '\n<!-- ...truncated... -->';
+                        return h;
+                    }""")
+                except Exception as ee:
+                    logger.warning(f"編集ページ取得失敗: {ee}")
+
+            info = "セラピスト: " + ", ".join(f"{t['name']}={t['idx']}" for t in therapists)
+            html = (
+                f"<!-- 出勤表セラピスト一覧 -->\n{info}\n\n"
+                f"<!-- 編集ページ /admin/schedule/{therapists[0]['idx'] if therapists else ''}/ ({edit_target}) -->\n"
+                f"{edit_html}"
+            )
 
             return {
                 "success": True,
                 "screenshot": screenshot_path,
+                "edit_screenshot": "/tmp/estama_schedule_edit.png",
                 "html": html,
-                "message": "出勤表ページのHTML/スクショを取得しました",
+                "message": f"出勤表＋編集ページのHTML/スクショを取得しました（{info}）",
             }
 
         except Exception as e:
