@@ -2893,6 +2893,22 @@ async def handle_auto_post_approval(update: Update, context: ContextTypes.DEFAUL
         except:
             await query.edit_message_text(text="❌ 自動投稿をキャンセルしました。")
 
+def _start_rion_scheduler() -> None:
+    """りおん自動運用スケジューラーを専用イベントループのスレッドで常駐起動する。
+    tweepy等の同期呼び出しがbot本体のイベントループをブロックしないよう分離。
+    クラッシュ時は30秒後に自動再起動。
+    """
+    import asyncio
+    import time as _time
+    from rion_auto_poster import run_scheduler
+    while True:
+        try:
+            asyncio.run(run_scheduler())
+        except Exception as e:
+            logger.error(f"りおんスケジューラー異常終了、30秒後に再起動: {e}")
+            _time.sleep(30)
+
+
 def main() -> None:
     """ボットを起動する"""
     request = HTTPXRequest(
@@ -3088,6 +3104,10 @@ def main() -> None:
         loop = asyncio.get_event_loop()
         from image_uploader import warm_drive_cache
         loop.run_in_executor(None, warm_drive_cache)
+        # りおん自動運用スケジューラーを常駐起動（別スレッド）
+        import threading
+        threading.Thread(target=_start_rion_scheduler, daemon=True, name="rion-scheduler").start()
+        logger.info("りおん自動運用スケジューラーを起動しました")
 
     app.post_init = post_init
 

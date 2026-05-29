@@ -293,8 +293,8 @@ async def run_scheduler():
                         posted_today.add(i)
                         logger.info(f"スロット{i}投稿完了: {post_type}")
 
-        # 30分おきに自動リプ
-        if now.minute % 30 == 0:
+        # 30分おきに自動リプ（生成APIキーがある時のみ。無いと返信文を作れず検索枠が無駄になる）
+        if now.minute % 30 == 0 and os.environ.get("ANTHROPIC_API_KEY"):
             count = search_and_reply(max_replies=3)
             if count:
                 logger.info(f"自動リプ: {count}件")
