@@ -30,6 +30,8 @@ import pytz
 from rion_persona import (
     generate_post,
     generate_reply,
+    generate_post_from_article,
+    load_articles,
     SENDAI_CUSTOMER_KEYWORDS,
 )
 
@@ -203,7 +205,13 @@ async def run_scheduler():
                 continue
             if now.hour == slot["hour"] and now.minute >= slot["minute"]:
                 post_type = _pick_post_type(slot)
-                text = generate_post(post_type)
+                # 美容系スロットは記事があれば記事ベースで生成
+                articles = load_articles()
+                if post_type in ("beauty", "daily") and articles:
+                    article = random.choice(articles)
+                    text = generate_post_from_article(article)
+                else:
+                    text = generate_post(post_type)
                 if text:
                     success = post_tweet(text)
                     if success:

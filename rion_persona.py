@@ -17,7 +17,6 @@ def _load_context() -> str:
     if not CONTEXT_FILE.exists():
         return ""
     text = CONTEXT_FILE.read_text(encoding="utf-8")
-    # "- テキスト" 形式の行に実際の内容があるか確認
     has_content = any(
         l.strip().startswith("- ") and len(l.strip()) > 2
         for l in text.splitlines()
@@ -25,6 +24,50 @@ def _load_context() -> str:
     if not has_content:
         return ""
     return text.strip()
+
+
+def load_articles() -> list[str]:
+    """参考記事セクションから記事テキストをリストで返す（--- 区切り）。"""
+    if not CONTEXT_FILE.exists():
+        return []
+    text = CONTEXT_FILE.read_text(encoding="utf-8")
+    # "## 参考記事" 以降を切り出す（ヘッダ行自体は除く）
+    marker = "## 参考記事"
+    idx = text.find(marker)
+    if idx == -1:
+        return []
+    newline = text.find("\n", idx)
+    section = text[newline + 1:] if newline != -1 else ""
+    # HTMLコメント行を除去
+    lines = [l for l in section.splitlines() if not l.strip().startswith("<!--")]
+    section = "\n".join(lines)
+    # --- で区切って各記事に分割
+    articles = [a.strip() for a in section.split("---") if a.strip()]
+    return articles
+
+
+def generate_post_from_article(article: str) -> str:
+    """記事テキストをもとにりおん口調のツイートを生成する。"""
+    prompt = f"""{SYSTEM_PROMPT}
+
+【タスク】
+以下の美容記事を読んで、りおんが自分の言葉で感想や気づきをつぶやくツイートを1つ書いてください。
+記事の内容を丸ごと紹介するのではなく、「読んで気になった点・試したくなったこと・共感したこと」を
+りおんの体験談・日常感覚として自然に表現してください。
+
+【記事内容】
+{article[:2000]}
+"""
+    try:
+        model = _get_model()
+        response = model.generate_content(
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            generation_config=genai.types.GenerationConfig(max_output_tokens=500),
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.error(f"記事ツイート生成エラー: {e}")
+        return ""
 
 # ──────────────────────────────────────────
 # ペルソナ設定
