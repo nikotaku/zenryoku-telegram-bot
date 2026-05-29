@@ -635,15 +635,65 @@ class EstamaBrowser:
             logger.info("一番上のセラピストにチェック")
 
             # 3. アピールボタンを押す
-            appeal_btn = page.locator(
-                'a:has-text("アピール"), button:has-text("アピール"), '
-                'input[type="submit"][value*="アピール"], .appeal-btn'
-            ).first
-            if await appeal_btn.count() == 0:
-                return {"success": False, "message": "アピールボタンが見つかりません"}
-            await appeal_btn.click()
-            await page.wait_for_timeout(2000)
+            # JS でページ本文に表示されているアピール要素を探す（ナビリンクを除外）
+            btn_info = await page.evaluate("""() => {
+                const cands = [];
+                for (const el of document.querySelectorAll(
+                    'button, input[type="submit"], a.btn, a.button, a[class*="btn"]'
+                )) {
+                    const text = (el.textContent || el.value || '').trim();
+                    if (!text.includes('アピール')) continue;
+                    const href = el.getAttribute('href') || '';
+                    // ナビリンク（現ページ自身へのリンク）を除外
+                    if (href.includes('/cast/appeal/')) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+                    cands.push({tag: el.tagName, text: text.slice(0,40), cls: el.className, href});
+                }
+                return cands;
+            }""")
+            logger.info(f"アピールボタン候補: {btn_info}")
 
+            # 候補を元にクリック
+            clicked = False
+            for info in (btn_info or []):
+                tag = info.get("tag", "").upper()
+                text = info.get("text", "")
+                if tag == "INPUT":
+                    locator = page.locator(f'input[type="submit"][value*="アピール"]').first
+                elif tag == "BUTTON":
+                    locator = page.locator(f'button:has-text("アピール")').first
+                else:
+                    cls = info.get("cls", "")
+                    href = info.get("href", "")
+                    if cls:
+                        locator = page.locator(f'a.{cls.split()[0]}:has-text("アピール")').first
+                    else:
+                        locator = page.locator(f'a[href="{href}"]').first
+                if await locator.count() > 0:
+                    await locator.scroll_into_view_if_needed()
+                    await locator.click()
+                    clicked = True
+                    break
+
+            if not clicked:
+                # フォールバック: ページ本文（#contents, main, form 内）のアピールリンク
+                fallback = page.locator(
+                    '#contents a:has-text("アピール"), '
+                    'main a:has-text("アピール"), '
+                    'form a:has-text("アピール"), '
+                    'form button:has-text("アピール"), '
+                    '.contents a:has-text("アピール")'
+                ).first
+                if await fallback.count() > 0:
+                    await fallback.scroll_into_view_if_needed()
+                    await fallback.click()
+                    clicked = True
+
+            if not clicked:
+                return {"success": False, "message": "アピールボタンが見つかりません（候補なし）"}
+
+            await page.wait_for_timeout(2000)
             return {"success": True, "message": "セラピストアピールを実行しました（出勤が早い順・一番上）"}
 
         except Exception as e:
