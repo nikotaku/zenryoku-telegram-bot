@@ -169,12 +169,7 @@ def search_and_reply(max_replies: int = 5) -> int:
 # ──────────────────────────────────────────
 # スケジューラー
 # ──────────────────────────────────────────
-SCHEDULE = [
-    {"hour": 8,  "minute": 30, "type": "morning"},
-    {"hour": 13, "minute": 0,  "type": None},      # ランダム（beauty/pilates/travel）
-    {"hour": 17, "minute": 30, "type": "shift_announce"},
-    {"hour": 23, "minute": 30, "type": None},      # ランダム（night/thanks）
-]
+SCHEDULE = []  # 自動ツイート停止中
 
 DAYTIME_TYPES = ["beauty", "pilates", "travel_power", "daily"]
 NIGHT_TYPES   = ["night", "thanks"]
