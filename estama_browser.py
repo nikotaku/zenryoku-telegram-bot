@@ -652,8 +652,9 @@ class EstamaBrowser:
 
     async def update_schedule_status(self, now_min: Optional[int] = None) -> dict:
         """
-        /admin/schedule/ を巡回し、現在時刻より前の時間帯で〇（受付可）の
-        ものを×（受付不可）に変更する（過去のみ・一方向）。
+        各セラピストの編集ページ (/admin/schedule/{idx}/) を requests で取得し、
+        今日の日付列で現在時刻より前の時間帯が○（受付可）になっているセルを
+        ×（受付不可）に変更してフォームを保存する。
 
         Args:
             now_min: 営業日基準の現在分（None なら JST 現在時刻から算出）。
@@ -662,113 +663,161 @@ class EstamaBrowser:
         Returns:
             {"success": bool, "message": str, "changed": [str]}
         """
-        if not await self._ensure_login():
+        import requests as _requests
+        from bs4 import BeautifulSoup
+        import pytz
+
+        jst = pytz.timezone("Asia/Tokyo")
+        now_jst = datetime.now(jst)
+        if now_min is None:
+            now_min = now_jst.hour * 60 + now_jst.minute
+            if now_jst.hour < 6:
+                now_min += 24 * 60
+        today_str = now_jst.strftime("%Y-%m-%d")
+
+        # requests セッションをログイン済みCookieで初期化
+        cookies_list = self._requests_login_cookies()
+        if not cookies_list:
             return {"success": False, "message": "ログインに失敗しました", "changed": []}
 
-        # 営業日基準の現在分を算出
-        if now_min is None:
-            now = datetime.now()
-            now_min = now.hour * 60 + now.minute
-            if now.hour < 6:
-                now_min += 24 * 60
+        sess = _requests.Session()
+        for c in cookies_list:
+            sess.cookies.set(c["name"], c["value"])
 
-        # 過去の〇を1つ見つけてクリックし、その情報を返す JS
-        # DOM 再描画に強いよう、毎回フレッシュに走査する
-        click_js = r"""(nowMin) => {
-            const AVAIL = ['〇', '○', '◯', '◎'];
-            function toBizMin(h, m) {
-                let t = h * 60 + m;
-                if (h < 6) t += 24 * 60;  // 深夜営業換算
-                return t;
-            }
-            // セル要素のテキストから時刻を推定
-            function timeFromText(t) {
-                if (!t) return null;
-                let m = t.match(/(\d{1,2}):(\d{2})/);
-                if (m) return toBizMin(parseInt(m[1], 10), parseInt(m[2], 10));
-                m = t.match(/(\d{1,2})\s*時/);
-                if (m) return toBizMin(parseInt(m[1], 10), 0);
-                return null;
-            }
-            // クリック候補（〇マークを持つ小さな要素）
-            const nodes = Array.from(document.querySelectorAll('a, button, td, span, label, div'));
-            for (const el of nodes) {
-                const txt = (el.textContent || '').trim();
-                if (txt.length > 4) continue;            // マーク単体のみ
-                if (!AVAIL.some(a => txt === a)) continue;
-
-                // この要素の時間帯を特定する
-                let slotMin = null;
-                // 1) 自身/祖先の data 属性
-                let p = el;
-                for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
-                    for (const attr of ['data-time', 'data-hour', 'data-slot']) {
-                        const v = p.getAttribute && p.getAttribute(attr);
-                        const tm = timeFromText(v);
-                        if (tm !== null) { slotMin = tm; break; }
-                    }
-                    if (slotMin !== null) break;
-                }
-                // 2) テーブル列ヘッダーから
-                if (slotMin === null) {
-                    const td = el.closest('td, th');
-                    if (td && td.parentElement) {
-                        const idx = Array.prototype.indexOf.call(td.parentElement.children, td);
-                        const table = el.closest('table');
-                        if (table) {
-                            const headRow = table.querySelector('thead tr') || table.querySelector('tr');
-                            if (headRow && headRow.children[idx]) {
-                                slotMin = timeFromText(headRow.children[idx].textContent);
-                            }
-                        }
-                    }
-                }
-                if (slotMin === null) continue;          // 時刻不明はスキップ（安全側）
-                if (slotMin >= nowMin) continue;          // 過去のみ対象
-
-                // セラピスト名（行頭セル）
-                let name = '';
-                const row = el.closest('tr');
-                if (row && row.children.length) {
-                    name = (row.children[0].textContent || '').trim().slice(0, 20);
-                }
-
-                // クリックして×に変更
-                el.click();
-                const hh = Math.floor((slotMin % (24 * 60)) / 60);
-                const mm = slotMin % 60;
-                return { name: name, time: ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2) };
-            }
-            return null;
-        }"""
-
+        # 出勤表一覧からセラピスト idx を取得
         try:
-            page = self._page
-            await page.goto(f"{ADMIN_URL}/schedule/", wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(2000)
-
-            changed = []
-            # 過去の〇が無くなるまで1つずつ処理（最大60回）
-            for _ in range(60):
-                result = await page.evaluate(click_js, now_min)
-                if not result:
-                    break
-                label = f"{result.get('name', '')} {result.get('time', '')}".strip()
-                changed.append(label)
-                logger.info(f"スケジュール更新: {label} 〇→×")
-                await page.wait_for_timeout(1200)  # Ajax反映待ち・連投防止
-
-            if changed:
-                return {
-                    "success": True,
-                    "message": f"{len(changed)}件を〇→×に更新: " + ", ".join(changed),
-                    "changed": changed,
-                }
-            return {"success": True, "message": "更新対象（過去の〇）はありませんでした", "changed": []}
-
+            r = sess.get(f"{ADMIN_URL}/schedule/", timeout=15)
+            soup = BeautifulSoup(r.text, "html.parser")
+            therapists = []
+            for th in soup.select("thead th[data-idx]"):
+                idx = th.get("data-idx")
+                name = th.get_text(strip=True)[:20]
+                if idx:
+                    therapists.append({"idx": idx, "name": name})
         except Exception as e:
-            logger.error(f"スケジュール状況更新エラー: {e}")
-            return {"success": False, "message": f"エラー: {str(e)}", "changed": []}
+            return {"success": False, "message": f"出勤表取得エラー: {e}", "changed": []}
+
+        if not therapists:
+            return {"success": True, "message": "セラピストが見つかりませんでした", "changed": []}
+
+        changed = []
+
+        for t in therapists:
+            idx = t["idx"]
+            tname = t["name"]
+            try:
+                r = sess.get(f"{ADMIN_URL}/schedule/{idx}/", timeout=15)
+                soup = BeautifulSoup(r.text, "html.parser")
+                form = soup.select_one("#WorkScheduleForm")
+                if not form:
+                    logger.warning(f"{tname}: WorkScheduleForm が見つかりません")
+                    continue
+
+                # フォームの全フィールド値を収集
+                form_data: dict = {}
+                for inp in form.find_all("input"):
+                    nm = inp.get("name")
+                    if not nm:
+                        continue
+                    t_type = inp.get("type", "text").lower()
+                    if t_type in ("submit", "button", "image", "reset"):
+                        continue
+                    if t_type == "checkbox":
+                        if inp.has_attr("checked"):
+                            form_data[nm] = inp.get("value", "on")
+                    elif t_type == "radio":
+                        if inp.has_attr("checked"):
+                            form_data[nm] = inp.get("value", "on")
+                    else:
+                        form_data[nm] = inp.get("value", "")
+
+                for sel_el in form.find_all("select"):
+                    nm = sel_el.get("name")
+                    if not nm:
+                        continue
+                    selected = sel_el.find("option", selected=True)
+                    form_data[nm] = selected.get("value", "") if selected else ""
+
+                # 今日の日付列で過去の時間帯○を×に変更
+                modified_slots: list[str] = []
+                today_selects = [
+                    sel_el.get("name", "") for sel_el in form.find_all("select")
+                    if f"column[{today_str}]" in sel_el.get("name", "")
+                ]
+                logger.info(f"{tname} 今日({today_str})のセレクト: {today_selects}")
+                for sel_el in form.find_all("select"):
+                    nm = sel_el.get("name", "")
+                    # 今日の日付が含まれている、かつ時刻形式 [HH:MM] で終わるもの
+                    if f"column[{today_str}]" not in nm:
+                        continue
+                    if "[select]" in nm:
+                        continue  # 出勤開始/終了セレクト除外
+                    m = re.search(r"\[(\d{1,2}:\d{2})\]$", nm)
+                    if not m:
+                        logger.debug(f"時刻パターン不一致: {nm}")
+                        continue
+
+                    time_str = m.group(1)
+                    hh, mm = map(int, time_str.split(":"))
+                    slot_min = hh * 60 + mm
+                    if hh < 6:
+                        slot_min += 24 * 60
+                    if slot_min >= now_min:
+                        continue  # まだ過去でない
+
+                    # 現在値を確認
+                    cur_opt = sel_el.find("option", selected=True)
+                    if not cur_opt:
+                        continue
+                    cur_text = cur_opt.get_text(strip=True)
+                    cur_val = cur_opt.get("value", "")
+
+                    # ○（受付可）でなければスキップ
+                    is_open = "○" in cur_text or "◯" in cur_text or cur_val in ("1", "open")
+                    if not is_open:
+                        continue
+
+                    # ×オプションを探す
+                    close_opt = None
+                    for opt in sel_el.find_all("option"):
+                        ot = opt.get_text(strip=True)
+                        ov = opt.get("value", "")
+                        if "×" in ot or "✕" in ot or ov in ("2", "soldout", "close", "x"):
+                            close_opt = opt
+                            break
+                    if not close_opt:
+                        continue
+
+                    form_data[nm] = close_opt.get("value", "")
+                    modified_slots.append(time_str)
+                    logger.info(f"スケジュール更新: {tname} {time_str} ○→×")
+
+                if not modified_slots:
+                    continue
+
+                # フォーム送信（POST）
+                form_action = form.get("action") or f"{ADMIN_URL}/schedule/{idx}/"
+                if not form_action.startswith("http"):
+                    form_action = BASE_URL.rstrip("/") + "/" + form_action.lstrip("/")
+                resp = sess.post(form_action, data=form_data, timeout=15,
+                                 headers={"Referer": f"{ADMIN_URL}/schedule/{idx}/"})
+                if resp.status_code in (200, 302):
+                    for s in modified_slots:
+                        changed.append(f"{tname} {s}")
+                else:
+                    logger.warning(f"{tname} フォーム送信失敗: HTTP {resp.status_code}")
+
+            except Exception as e:
+                logger.warning(f"{tname} 処理エラー: {e}")
+                continue
+
+        if changed:
+            return {
+                "success": True,
+                "message": f"{len(changed)}件を○→×に更新: " + ", ".join(changed),
+                "changed": changed,
+            }
+        return {"success": True, "message": "更新対象（過去の○）はありませんでした", "changed": []}
 
     async def dump_schedule_debug(self, screenshot_path: str = "/tmp/estama_schedule.png") -> dict:
         """
@@ -817,18 +866,22 @@ class EstamaBrowser:
                     except Exception:
                         pass
                     edit_html = await page.evaluate(r"""() => {
-                        // フォーム or 最大のテーブルを優先して抽出
-                        const form = document.querySelector('form');
-                        const tables = Array.from(document.querySelectorAll('table'));
-                        let el = form;
-                        if (!el && tables.length) {
-                            el = tables.reduce((a, b) =>
-                                (b.textContent || '').length > (a.textContent || '').length ? b : a);
+                        const out = [];
+                        // thead: 日付カラムのselect名を確認
+                        const thead = document.querySelector('table.sce_tb thead');
+                        if (thead) {
+                            let h = thead.outerHTML;
+                            if (h.length > 8000) h = h.slice(0, 8000) + '\n<!-- thead truncated -->';
+                            out.push('<!-- THEAD -->\n' + h);
                         }
-                        if (!el) el = document.body;
-                        let h = el.outerHTML || '';
-                        if (h.length > 16000) h = h.slice(0, 16000) + '\n<!-- ...truncated... -->';
-                        return h;
+                        // tbody: 最初の5行だけ取得（select name属性の確認用）
+                        const tbody = document.querySelector('table.sce_tb tbody');
+                        if (tbody) {
+                            const rows = Array.from(tbody.querySelectorAll('tr')).slice(0, 5);
+                            const sample = rows.map(r => r.outerHTML).join('\n');
+                            out.push('<!-- TBODY SAMPLE (first 5 rows) -->\n' + sample);
+                        }
+                        return out.join('\n\n');
                     }""")
                 except Exception as ee:
                     logger.warning(f"編集ページ取得失敗: {ee}")
