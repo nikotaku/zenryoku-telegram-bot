@@ -338,27 +338,104 @@ async def _process_media_group_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def _show_photo_category_menu(reply_fn, context, count: int) -> None:
-    """カテゴリ選択キーボードを送信する"""
-    from photo_storage import get_all_names
-    names = get_all_names()
+def _build_photo_nav_keyboard(path: str, mode: str):
+    """フォルダナビゲーションキーボードを構築する。
+    mode="save": アップロード先選択用 (photo_save: / photo_save:__new__ etc.)
+    mode="dl":   ダウンロード用      (dl_photo:)
+    Returns (header_text, InlineKeyboardMarkup)
+    """
+    from photo_storage import get_children
+    ch = get_children(path)
+    folders = ch["folders"]
+    leaves  = ch["leaves"]
 
     keyboard = []
+
+    # フォルダボタン（1行1つ）
+    for folder in folders:
+        full = f"{path}/{folder}" if path else folder
+        # callback_data は64バイト制限 → 超える場合はスキップ
+        cb = f"pnav:{full}"
+        if len(cb.encode()) <= 64:
+            keyboard.append([InlineKeyboardButton(f"📁 {folder[:16]}", callback_data=cb)])
+
+    # 葉ノードボタン（2列）
     row = []
-    for name in names:
-        row.append(InlineKeyboardButton(name[:15], callback_data=f"photo_save:{name}"))
-        if len(row) == 3:
+    for leaf in leaves:
+        label = leaf.split("/")[-1]
+        cb = f"photo_save:{leaf}" if mode == "save" else f"dl_photo:{leaf}"
+        if len(cb.encode()) > 64:
+            continue
+        row.append(InlineKeyboardButton(f"🖼 {label[:12]}", callback_data=cb))
+        if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("➕ 新しいカテゴリ名で保存", callback_data="photo_save:__new__")])
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="photo_save:cancel")])
 
+    # 「このフォルダに保存」ボタン（save mode かつサブフォルダ内）
+    if mode == "save" and path:
+        folder_name = path.split("/")[-1]
+        cb = f"photo_save:{path}"
+        if len(cb.encode()) <= 64:
+            keyboard.append([InlineKeyboardButton(
+                f"💾 「{folder_name[:12]}」フォルダに保存", callback_data=cb
+            )])
+
+    # 新規ボタン（save mode のみ）
+    if mode == "save":
+        keyboard.append([InlineKeyboardButton("➕ 新規フォルダ/カテゴリ", callback_data="photo_save:__new__")])
+
+    # 戻るボタン
+    if path:
+        parent = "/".join(path.split("/")[:-1])
+        keyboard.append([InlineKeyboardButton("⬅️ 戻る", callback_data=f"pnav:{parent}")])
+
+    # キャンセル/閉じる
+    cancel_cb = "photo_save:cancel" if mode == "save" else "dl_therapist:cancel"
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data=cancel_cb)])
+
+    # パンくず
+    if path:
+        breadcrumb = " ＞ ".join(path.split("/"))
+        header = f"📂 {breadcrumb}"
+    else:
+        header = "📂 ルート"
+
+    return header, InlineKeyboardMarkup(keyboard)
+
+
+async def handle_pnav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """フォルダナビゲーションコールバック"""
+    query = update.callback_query
+    await query.answer()
+    path = query.data[len("pnav:"):]
+    mode = context.user_data.get("photo_nav_mode", "save")
+    context.user_data["photo_nav_path"] = path
+
+    header, markup = _build_photo_nav_keyboard(path, mode)
+
+    if mode == "save":
+        pending = context.user_data.get("pending_photos") or []
+        count = len(pending)
+        label = f"{count}枚の画像" if count > 1 else "画像"
+        text = f"📸 {label}を受け取りました！\n\n{header}\n保存先を選択してください:"
+    else:
+        text = f"⬇️ 【画像ダウンロード】\n{header}\nカテゴリを選択してください："
+
+    await query.edit_message_text(text, reply_markup=markup)
+
+
+async def _show_photo_category_menu(reply_fn, context, count: int) -> None:
+    """カテゴリ選択キーボードを送信する（フォルダナビゲーション対応）"""
+    context.user_data["photo_nav_mode"] = "save"
+    context.user_data["photo_nav_path"] = ""
+
+    header, markup = _build_photo_nav_keyboard("", "save")
     label = f"{count}枚の画像" if count > 1 else "画像"
     await reply_fn(
-        f"📸 {label}を受け取りました！\n\n保存先を選択してください:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"📸 {label}を受け取りました！\n\n{header}\n保存先を選択してください:",
+        reply_markup=markup,
     )
 
 
@@ -369,14 +446,12 @@ async def handle_img_up_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.reply_text("📷 アップロードしたい画像を送信してください。送信後、保存先のセラピストを選択できます。")
 
 async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """画像DL: photo_storageのカテゴリ一覧を表示"""
+    """画像DL: フォルダナビゲーション形式でカテゴリ一覧を表示"""
     query = update.callback_query
     await query.answer()
 
     from photo_storage import get_all_names
-    names = get_all_names()
-
-    if not names:
+    if not get_all_names():
         await query.edit_message_text(
             "📭 登録済みの写真がありません。\n\n"
             "チャンネルに写真を「セラピスト名」キャプション付きで投稿すると自動登録されます。",
@@ -386,20 +461,12 @@ async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    keyboard = []
-    row = []
-    for name in names:
-        row.append(InlineKeyboardButton(name[:14], callback_data=f"dl_photo:{name}"))
-        if len(row) == 3:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
-
+    context.user_data["photo_nav_mode"] = "dl"
+    context.user_data["photo_nav_path"] = ""
+    header, markup = _build_photo_nav_keyboard("", "dl")
     await query.edit_message_text(
-        "⬇️ 【画像ダウンロード】\nカテゴリを選択してください：",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        f"⬇️ 【画像ダウンロード】\n{header}\nカテゴリを選択してください：",
+        reply_markup=markup,
     )
 
 
@@ -578,7 +645,12 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
 
     if data == "__new__":
         context.user_data["photo_save_awaiting_name"] = True
-        await query.edit_message_text("📝 新しいカテゴリ名を入力してください（例：りな、スクエアバナー）：")
+        nav_path = context.user_data.get("photo_nav_path", "")
+        if nav_path:
+            hint = f"現在のフォルダ: 📂 {nav_path}\n名前を入力すると「{nav_path}/名前」として保存されます。"
+        else:
+            hint = "例: はる（単一）、はる/プロフィール（フォルダ入れ子）"
+        await query.edit_message_text(f"📝 保存先名を入力してください\n\n{hint}")
         return
 
     # pending_photos (新形式) または pending_photo_file_id (旧形式) を取得
@@ -599,7 +671,13 @@ async def handle_photo_name_text(update: Update, context: ContextTypes.DEFAULT_T
     if not context.user_data.get("photo_save_awaiting_name"):
         return
     context.user_data.pop("photo_save_awaiting_name", None)
-    name = update.message.text.strip()
+    raw = update.message.text.strip()
+    nav_path = context.user_data.get("photo_nav_path", "")
+    # すでに絶対パスが入力された場合はそのまま、そうでなければ現在フォルダを前置する
+    if nav_path and not raw.startswith(nav_path + "/"):
+        name = f"{nav_path}/{raw}"
+    else:
+        name = raw
     file_ids = context.user_data.get("pending_photos") or []
     if not file_ids:
         legacy = context.user_data.get("pending_photo_file_id")
@@ -2984,6 +3062,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
 
+    app.add_handler(CallbackQueryHandler(handle_pnav_callback, pattern=r"^pnav:"))
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))

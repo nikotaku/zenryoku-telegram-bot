@@ -46,6 +46,34 @@ def get_all_names() -> list:
     return sorted(load_index().keys())
 
 
+def get_children(path: str = "") -> dict:
+    """path 直下のサブフォルダ一覧と写真あり葉ノード一覧を返す。
+    Returns {"folders": [name, ...], "leaves": [full_path, ...]}
+    """
+    index = load_index()
+    prefix = path + "/" if path else ""
+    folders: set = set()
+    leaves: list = []
+    for key in index:
+        if path == "":
+            parts = key.split("/", 1)
+            if len(parts) == 1:
+                leaves.append(key)
+            else:
+                folders.add(parts[0])
+        else:
+            if key == path:
+                pass  # 現在のフォルダ自体は "このフォルダに保存" ボタンで代替
+            elif key.startswith(prefix):
+                rest = key[len(prefix):]
+                parts = rest.split("/", 1)
+                if len(parts) == 1:
+                    leaves.append(key)
+                else:
+                    folders.add(parts[0])
+    return {"folders": sorted(folders), "leaves": sorted(leaves)}
+
+
 def remove_photo(name: str, file_id: str):
     index = load_index()
     if name in index and file_id in index[name]:
