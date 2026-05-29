@@ -5,9 +5,101 @@
 import os
 import random
 import logging
-import google.generativeai as genai
+from pathlib import Path
+import requests
 
 logger = logging.getLogger(__name__)
+
+# 使用するClaudeモデル（安価で高速なHaiku）
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+
+CONTEXT_FILE = Path(__file__).parent / "rion_context.md"
+
+
+def _load_context() -> str:
+    if not CONTEXT_FILE.exists():
+        return ""
+    text = CONTEXT_FILE.read_text(encoding="utf-8")
+    has_content = any(
+        l.strip().startswith("- ") and len(l.strip()) > 2
+        for l in text.splitlines()
+    )
+    if not has_content:
+        return ""
+    return text.strip()
+
+
+def _extract_section(header_prefix: str) -> str:
+    """指定見出し（## ...）の本文を、次の ## 見出しの手前まで切り出す。"""
+    if not CONTEXT_FILE.exists():
+        return ""
+    text = CONTEXT_FILE.read_text(encoding="utf-8")
+    idx = text.find(header_prefix)
+    if idx == -1:
+        return ""
+    newline = text.find("\n", idx)
+    body = text[newline + 1:] if newline != -1 else ""
+    # 次の "## " 見出しが来たらそこまで
+    out_lines = []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            break
+        if line.strip().startswith("<!--"):
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def load_articles() -> list[str]:
+    """参考記事セクションから記事テキストをリストで返す（--- 区切り）。"""
+    section = _extract_section("## 参考記事")
+    return [a.strip() for a in section.split("---") if a.strip()]
+
+
+def load_rt_accounts() -> list[str]:
+    """RT対象アカウントセクションから @ユーザー名を抽出して返す（@は除く）。
+    "@account" でも "https://x.com/account" でも可。
+    """
+    import re
+    section = _extract_section("## RT対象アカウント")
+    names: list[str] = []
+    for line in section.splitlines():
+        line = line.strip().lstrip("-").strip()
+        if not line:
+            continue
+        # URL形式
+        m = re.search(r"(?:x\.com|twitter\.com)/([A-Za-z0-9_]+)", line)
+        if m:
+            names.append(m.group(1))
+            continue
+        # @ユーザー名 / 素のユーザー名
+        token = line.lstrip("@").split()[0] if line.split() else ""
+        if re.fullmatch(r"[A-Za-z0-9_]{1,15}", token):
+            names.append(token)
+    # 重複除去（順序維持・大文字小文字無視）
+    seen = set()
+    out = []
+    for n in names:
+        key = n.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+    return out
+
+
+def generate_post_from_article(article: str) -> str:
+    """記事テキストをもとにりおん口調のツイートを生成する。"""
+    prompt = f"""{SYSTEM_PROMPT}
+
+【タスク】
+以下の美容記事を読んで、りおんが自分の言葉で感想や気づきをつぶやくツイートを1つ書いてください。
+記事の内容を丸ごと紹介するのではなく、「読んで気になった点・試したくなったこと・共感したこと」を
+りおんの体験談・日常感覚として自然に表現してください。
+
+【記事内容】
+{article[:2000]}
+"""
+    return _call_llm(prompt, max_tokens=500)
 
 # ──────────────────────────────────────────
 # ペルソナ設定
@@ -49,9 +141,33 @@ Xに投稿するツイートを書いてください。
 """
 
 
-def _get_model():
-    genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-    return genai.GenerativeModel("gemini-2.5-flash")
+def _call_llm(prompt: str, max_tokens: int = 500) -> str:
+    """Anthropic Claude API を requests で直接呼び出す。"""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY が設定されていません")
+        return ""
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return "".join(b.get("text", "") for b in data.get("content", [])).strip()
+    except Exception as e:
+        logger.error(f"Claude API エラー: {e}")
+        return ""
 
 
 # ──────────────────────────────────────────
@@ -76,16 +192,9 @@ def generate_post(post_type: str = None) -> str:
 
     prompt = POST_TYPES.get(post_type, POST_TYPES["daily"])
 
-    try:
-        model = _get_model()
-        response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": f"{SYSTEM_PROMPT}\n\n【今回の投稿テーマ】{prompt}"}]}],
-            generation_config=genai.types.GenerationConfig(max_output_tokens=500),
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"投稿生成エラー: {e}")
-        return ""
+    ctx = _load_context()
+    context_block = f"\n\n【りおんの最近のネタ帳（参考にしてください）】\n{ctx}" if ctx else ""
+    return _call_llm(f"{SYSTEM_PROMPT}{context_block}\n\n【今回の投稿テーマ】{prompt}", max_tokens=500)
 
 
 def generate_reply(mention_text: str, username: str) -> str:
@@ -106,16 +215,7 @@ def generate_reply(mention_text: str, username: str) -> str:
 - 絵文字1〜2個
 - 宣伝・誘導は絶対にしない
 """
-    try:
-        model = _get_model()
-        response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": reply_prompt}]}],
-            generation_config=genai.types.GenerationConfig(max_output_tokens=100),
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"返信生成エラー: {e}")
-        return ""
+    return _call_llm(reply_prompt, max_tokens=150)
 
 
 # 仙台お客様サーチ用キーワード（自動リプ対象）

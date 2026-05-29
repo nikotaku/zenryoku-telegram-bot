@@ -30,6 +30,9 @@ import pytz
 from rion_persona import (
     generate_post,
     generate_reply,
+    generate_post_from_article,
+    load_articles,
+    load_rt_accounts,
     SENDAI_CUSTOMER_KEYWORDS,
 )
 
@@ -82,6 +85,80 @@ def _save_replied_id(tweet_id: str):
     # 最大1000件まで
     ids = ids[-1000:]
     REPLIED_IDS_FILE.write_text(json.dumps(ids, ensure_ascii=False))
+
+
+# 既RT済みツイートIDを保存するファイル
+RETWEETED_IDS_FILE = Path("rion_retweeted_ids.json")
+
+
+def _load_retweeted_ids() -> set:
+    if RETWEETED_IDS_FILE.exists():
+        try:
+            return set(json.loads(RETWEETED_IDS_FILE.read_text()))
+        except Exception:
+            pass
+    return set()
+
+
+def _save_retweeted_ids(ids: set):
+    # 最大2000件まで保持
+    RETWEETED_IDS_FILE.write_text(json.dumps(list(ids)[-2000:], ensure_ascii=False))
+
+
+def retweet_from_accounts(max_per_account: int = 1) -> int:
+    """RT対象アカウントの最新ツイートを自動RTする。RTした件数を返す。"""
+    accounts = load_rt_accounts()
+    if not accounts:
+        return 0
+    client = _get_client()
+    if not client:
+        return 0
+
+    # 自分のユーザーIDを取得（RTに必要）
+    try:
+        me = client.get_me()
+        my_id = me.data.id
+    except Exception as e:
+        logger.error(f"get_me エラー: {e}")
+        return 0
+
+    done = _load_retweeted_ids()
+    rt_count = 0
+
+    for username in accounts:
+        try:
+            user = client.get_user(username=username)
+            if not user.data:
+                continue
+            tweets = client.get_users_tweets(
+                user.data.id,
+                max_results=5,
+                exclude=["retweets", "replies"],
+                tweet_fields=["created_at"],
+            )
+            if not tweets.data:
+                continue
+            posted = 0
+            for tw in tweets.data:  # 新しい順
+                if posted >= max_per_account:
+                    break
+                tid = str(tw.id)
+                if tid in done:
+                    continue
+                try:
+                    client.retweet(tid)
+                    done.add(tid)
+                    rt_count += 1
+                    posted += 1
+                    logger.info(f"RT: @{username} | {tid}")
+                except Exception as e:
+                    logger.error(f"RTエラー @{username} {tid}: {e}")
+                    done.add(tid)  # 失敗（既RT等）も記録して再試行を防ぐ
+        except Exception as e:
+            logger.error(f"アカウント取得エラー @{username}: {e}")
+
+    _save_retweeted_ids(done)
+    return rt_count
 
 
 def post_tweet(text: str) -> tuple[bool, str]:
@@ -170,10 +247,10 @@ def search_and_reply(max_replies: int = 5) -> int:
 # スケジューラー
 # ──────────────────────────────────────────
 SCHEDULE = [
-    {"hour": 8,  "minute": 30, "type": "morning"},
-    {"hour": 13, "minute": 0,  "type": None},      # ランダム（beauty/pilates/travel）
-    {"hour": 17, "minute": 30, "type": "shift_announce"},
-    {"hour": 23, "minute": 30, "type": None},      # ランダム（night/thanks）
+    {"hour": 8,  "minute": 30, "type": None},  # 朝（内容ランダム）
+    {"hour": 13, "minute": 0,  "type": None},  # 昼（内容ランダム）
+    {"hour": 17, "minute": 30, "type": None},  # 夕（内容ランダム）
+    {"hour": 23, "minute": 30, "type": None},  # 夜（内容ランダム）
 ]
 
 DAYTIME_TYPES = ["beauty", "pilates", "travel_power", "daily"]
@@ -208,18 +285,30 @@ async def run_scheduler():
                 continue
             if now.hour == slot["hour"] and now.minute >= slot["minute"]:
                 post_type = _pick_post_type(slot)
-                text = generate_post(post_type)
+                # 美容系スロットは記事があれば記事ベースで生成
+                articles = load_articles()
+                if post_type in ("beauty", "daily") and articles:
+                    article = random.choice(articles)
+                    text = generate_post_from_article(article)
+                else:
+                    text = generate_post(post_type)
                 if text:
                     success = post_tweet(text)
                     if success:
                         posted_today.add(i)
                         logger.info(f"スロット{i}投稿完了: {post_type}")
 
-        # 30分おきに自動リプ
-        if now.minute % 30 == 0:
+        # 30分おきに自動リプ（生成APIキーがある時のみ。無いと返信文を作れず検索枠が無駄になる）
+        if now.minute % 30 == 0 and os.environ.get("ANTHROPIC_API_KEY"):
             count = search_and_reply(max_replies=3)
             if count:
                 logger.info(f"自動リプ: {count}件")
+
+        # 1時間おきに対象アカウントの最新を自動RT
+        if now.minute == 0:
+            rt = retweet_from_accounts(max_per_account=1)
+            if rt:
+                logger.info(f"自動RT: {rt}件")
 
         await asyncio.sleep(60)  # 1分ごとにチェック
 

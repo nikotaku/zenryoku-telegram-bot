@@ -338,27 +338,104 @@ async def _process_media_group_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def _show_photo_category_menu(reply_fn, context, count: int) -> None:
-    """カテゴリ選択キーボードを送信する"""
-    from photo_storage import get_all_names
-    names = get_all_names()
+def _build_photo_nav_keyboard(path: str, mode: str):
+    """フォルダナビゲーションキーボードを構築する。
+    mode="save": アップロード先選択用 (photo_save: / photo_save:__new__ etc.)
+    mode="dl":   ダウンロード用      (dl_photo:)
+    Returns (header_text, InlineKeyboardMarkup)
+    """
+    from photo_storage import get_children
+    ch = get_children(path)
+    folders = ch["folders"]
+    leaves  = ch["leaves"]
 
     keyboard = []
+
+    # フォルダボタン（1行1つ）
+    for folder in folders:
+        full = f"{path}/{folder}" if path else folder
+        # callback_data は64バイト制限 → 超える場合はスキップ
+        cb = f"pnav:{full}"
+        if len(cb.encode()) <= 64:
+            keyboard.append([InlineKeyboardButton(f"📁 {folder[:16]}", callback_data=cb)])
+
+    # 葉ノードボタン（2列）
     row = []
-    for name in names:
-        row.append(InlineKeyboardButton(name[:15], callback_data=f"photo_save:{name}"))
-        if len(row) == 3:
+    for leaf in leaves:
+        label = leaf.split("/")[-1]
+        cb = f"photo_save:{leaf}" if mode == "save" else f"dl_photo:{leaf}"
+        if len(cb.encode()) > 64:
+            continue
+        row.append(InlineKeyboardButton(f"🖼 {label[:12]}", callback_data=cb))
+        if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("➕ 新しいカテゴリ名で保存", callback_data="photo_save:__new__")])
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="photo_save:cancel")])
 
+    # 「このフォルダに保存」ボタン（save mode かつサブフォルダ内）
+    if mode == "save" and path:
+        folder_name = path.split("/")[-1]
+        cb = f"photo_save:{path}"
+        if len(cb.encode()) <= 64:
+            keyboard.append([InlineKeyboardButton(
+                f"💾 「{folder_name[:12]}」フォルダに保存", callback_data=cb
+            )])
+
+    # 新規ボタン（save mode のみ）
+    if mode == "save":
+        keyboard.append([InlineKeyboardButton("➕ 新規フォルダ/カテゴリ", callback_data="photo_save:__new__")])
+
+    # 戻るボタン
+    if path:
+        parent = "/".join(path.split("/")[:-1])
+        keyboard.append([InlineKeyboardButton("⬅️ 戻る", callback_data=f"pnav:{parent}")])
+
+    # キャンセル/閉じる
+    cancel_cb = "photo_save:cancel" if mode == "save" else "dl_therapist:cancel"
+    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data=cancel_cb)])
+
+    # パンくず
+    if path:
+        breadcrumb = " ＞ ".join(path.split("/"))
+        header = f"📂 {breadcrumb}"
+    else:
+        header = "📂 ルート"
+
+    return header, InlineKeyboardMarkup(keyboard)
+
+
+async def handle_pnav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """フォルダナビゲーションコールバック"""
+    query = update.callback_query
+    await query.answer()
+    path = query.data[len("pnav:"):]
+    mode = context.user_data.get("photo_nav_mode", "save")
+    context.user_data["photo_nav_path"] = path
+
+    header, markup = _build_photo_nav_keyboard(path, mode)
+
+    if mode == "save":
+        pending = context.user_data.get("pending_photos") or []
+        count = len(pending)
+        label = f"{count}枚の画像" if count > 1 else "画像"
+        text = f"📸 {label}を受け取りました！\n\n{header}\n保存先を選択してください:"
+    else:
+        text = f"⬇️ 【画像ダウンロード】\n{header}\nカテゴリを選択してください："
+
+    await query.edit_message_text(text, reply_markup=markup)
+
+
+async def _show_photo_category_menu(reply_fn, context, count: int) -> None:
+    """カテゴリ選択キーボードを送信する（フォルダナビゲーション対応）"""
+    context.user_data["photo_nav_mode"] = "save"
+    context.user_data["photo_nav_path"] = ""
+
+    header, markup = _build_photo_nav_keyboard("", "save")
     label = f"{count}枚の画像" if count > 1 else "画像"
     await reply_fn(
-        f"📸 {label}を受け取りました！\n\n保存先を選択してください:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"📸 {label}を受け取りました！\n\n{header}\n保存先を選択してください:",
+        reply_markup=markup,
     )
 
 
@@ -369,14 +446,12 @@ async def handle_img_up_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.reply_text("📷 アップロードしたい画像を送信してください。送信後、保存先のセラピストを選択できます。")
 
 async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """画像DL: photo_storageのカテゴリ一覧を表示"""
+    """画像DL: フォルダナビゲーション形式でカテゴリ一覧を表示"""
     query = update.callback_query
     await query.answer()
 
     from photo_storage import get_all_names
-    names = get_all_names()
-
-    if not names:
+    if not get_all_names():
         await query.edit_message_text(
             "📭 登録済みの写真がありません。\n\n"
             "チャンネルに写真を「セラピスト名」キャプション付きで投稿すると自動登録されます。",
@@ -386,20 +461,12 @@ async def handle_img_dl_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    keyboard = []
-    row = []
-    for name in names:
-        row.append(InlineKeyboardButton(name[:14], callback_data=f"dl_photo:{name}"))
-        if len(row) == 3:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ キャンセル", callback_data="dl_therapist:cancel")])
-
+    context.user_data["photo_nav_mode"] = "dl"
+    context.user_data["photo_nav_path"] = ""
+    header, markup = _build_photo_nav_keyboard("", "dl")
     await query.edit_message_text(
-        "⬇️ 【画像ダウンロード】\nカテゴリを選択してください：",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        f"⬇️ 【画像ダウンロード】\n{header}\nカテゴリを選択してください：",
+        reply_markup=markup,
     )
 
 
@@ -578,7 +645,12 @@ async def handle_photo_save_callback(update: Update, context: ContextTypes.DEFAU
 
     if data == "__new__":
         context.user_data["photo_save_awaiting_name"] = True
-        await query.edit_message_text("📝 新しいカテゴリ名を入力してください（例：りな、スクエアバナー）：")
+        nav_path = context.user_data.get("photo_nav_path", "")
+        if nav_path:
+            hint = f"現在のフォルダ: 📂 {nav_path}\n名前を入力すると「{nav_path}/名前」として保存されます。"
+        else:
+            hint = "例: はる（単一）、はる/プロフィール（フォルダ入れ子）"
+        await query.edit_message_text(f"📝 保存先名を入力してください\n\n{hint}")
         return
 
     # pending_photos (新形式) または pending_photo_file_id (旧形式) を取得
@@ -599,7 +671,13 @@ async def handle_photo_name_text(update: Update, context: ContextTypes.DEFAULT_T
     if not context.user_data.get("photo_save_awaiting_name"):
         return
     context.user_data.pop("photo_save_awaiting_name", None)
-    name = update.message.text.strip()
+    raw = update.message.text.strip()
+    nav_path = context.user_data.get("photo_nav_path", "")
+    # すでに絶対パスが入力された場合はそのまま、そうでなければ現在フォルダを前置する
+    if nav_path and not raw.startswith(nav_path + "/"):
+        name = f"{nav_path}/{raw}"
+    else:
+        name = raw
     file_ids = context.user_data.get("pending_photos") or []
     if not file_ids:
         legacy = context.user_data.get("pending_photo_file_id")
@@ -1467,6 +1545,72 @@ async def cmd_chatid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """現在のチャットIDを返す（グループ登録用）"""
     chat_id = update.effective_chat.id
     await update.message.reply_text(f"このチャット（グループ）のIDは以下です：\n`{chat_id}`\nこれをシステムに登録してください。", parse_mode="Markdown")
+
+
+async def cmd_wipe_tweets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """りおんアカウントの投稿済みツイートを全削除（管理者のみ・確認ボタン付き）"""
+    if str(update.effective_user.id) != str(ADMIN_CHAT_ID):
+        await update.message.reply_text("⚠️ このコマンドは管理者専用です。")
+        return
+    msg = await update.message.reply_text("🔍 削除対象のツイートを集計中...")
+    try:
+        import asyncio
+        from delete_all_tweets import _client, fetch_all_tweet_ids
+        client = _client()
+        me = client.get_me()
+        ids = await asyncio.to_thread(fetch_all_tweet_ids, client, me.data.id)
+    except Exception as e:
+        await msg.edit_text(f"❌ 集計失敗: {e}")
+        return
+    if not ids:
+        await msg.edit_text("削除対象のツイートはありませんでした。")
+        return
+    context.user_data["wipe_tweet_ids"] = ids
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"🗑 {len(ids)}件すべて削除", callback_data="wipe_tweets:confirm"),
+        InlineKeyboardButton("キャンセル", callback_data="wipe_tweets:cancel"),
+    ]])
+    await msg.edit_text(
+        f"⚠️ @{me.data.username} の投稿済みツイート {len(ids)}件 が見つかりました。\n"
+        "削除すると元に戻せません。本当に削除しますか？",
+        reply_markup=keyboard,
+    )
+
+
+async def handle_wipe_tweets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if str(update.effective_user.id) != str(ADMIN_CHAT_ID):
+        await query.edit_message_text("⚠️ 管理者専用です。")
+        return
+    action = query.data.split(":", 1)[1]
+    if action == "cancel":
+        context.user_data.pop("wipe_tweet_ids", None)
+        await query.edit_message_text("キャンセルしました。ツイートは削除していません。")
+        return
+    ids = context.user_data.pop("wipe_tweet_ids", [])
+    if not ids:
+        await query.edit_message_text("対象が見つかりませんでした。もう一度 /wipe_tweets を実行してください。")
+        return
+    await query.edit_message_text(f"🗑 削除中...（{len(ids)}件）")
+
+    import asyncio
+    from delete_all_tweets import _client
+    client = _client()
+
+    def _do_delete():
+        deleted = 0
+        for tid in ids:
+            try:
+                client.delete_tweet(tid)
+                deleted += 1
+            except Exception as e:
+                logger.error(f"ツイート削除失敗 {tid}: {e}")
+        return deleted
+
+    deleted = await asyncio.to_thread(_do_delete)
+    await query.edit_message_text(f"✅ 完了: {deleted}/{len(ids)}件 削除しました。")
+
 
 async def scheduled_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
     """定期実行される同期ジョブ"""
@@ -2815,6 +2959,22 @@ async def handle_auto_post_approval(update: Update, context: ContextTypes.DEFAUL
         except:
             await query.edit_message_text(text="❌ 自動投稿をキャンセルしました。")
 
+def _start_rion_scheduler() -> None:
+    """りおん自動運用スケジューラーを専用イベントループのスレッドで常駐起動する。
+    tweepy等の同期呼び出しがbot本体のイベントループをブロックしないよう分離。
+    クラッシュ時は30秒後に自動再起動。
+    """
+    import asyncio
+    import time as _time
+    from rion_auto_poster import run_scheduler
+    while True:
+        try:
+            asyncio.run(run_scheduler())
+        except Exception as e:
+            logger.error(f"りおんスケジューラー異常終了、30秒後に再起動: {e}")
+            _time.sleep(30)
+
+
 def main() -> None:
     """ボットを起動する"""
     request = HTTPXRequest(
@@ -2890,6 +3050,8 @@ def main() -> None:
 
     # コマンドの追加
     app.add_handler(CommandHandler("chatid", cmd_chatid))
+    app.add_handler(CommandHandler("wipe_tweets", cmd_wipe_tweets))
+    app.add_handler(CallbackQueryHandler(handle_wipe_tweets_callback, pattern=r"^wipe_tweets:"))
 
 
 
@@ -2984,6 +3146,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_dl_cat_callback, pattern=r"^dl_cat:"))
     app.add_handler(CallbackQueryHandler(handle_dl_therapist_callback, pattern=r"^dl_therapist:"))
 
+    app.add_handler(CallbackQueryHandler(handle_pnav_callback, pattern=r"^pnav:"))
     app.add_handler(CallbackQueryHandler(handle_photo_save_callback, pattern=r"^photo_save:"))
     app.add_handler(CallbackQueryHandler(expense_confirm_callback, pattern=r"^expense_confirm:"))
     app.add_handler(CallbackQueryHandler(handle_diary_callback, pattern=r"^diary:[0-9]+$"))
@@ -3009,6 +3172,10 @@ def main() -> None:
         loop = asyncio.get_event_loop()
         from image_uploader import warm_drive_cache
         loop.run_in_executor(None, warm_drive_cache)
+        # りおん自動運用スケジューラーを常駐起動（別スレッド）
+        import threading
+        threading.Thread(target=_start_rion_scheduler, daemon=True, name="rion-scheduler").start()
+        logger.info("りおん自動運用スケジューラーを起動しました")
 
     app.post_init = post_init
 
