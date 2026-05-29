@@ -1548,24 +1548,40 @@ async def cmd_chatid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_wipe_tweets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """りおんアカウントの投稿済みツイートを全削除（管理者のみ・確認ボタン付き）"""
-    if str(update.effective_user.id) != str(ADMIN_CHAT_ID):
-        await update.message.reply_text("⚠️ このコマンドは管理者専用です。")
-        return
+    """りおんアカウントの投稿済みツイートを全削除（確認ボタン付き）"""
     msg = await update.message.reply_text("🔍 削除対象のツイートを集計中...")
     try:
         import asyncio
-        from delete_all_tweets import _client, fetch_all_tweet_ids
 
         def _collect():
-            c = _client()
+            import os
+            import tweepy
+            c = tweepy.Client(
+                consumer_key=os.environ.get("RION_X_API_KEY"),
+                consumer_secret=os.environ.get("RION_X_API_SECRET"),
+                access_token=os.environ.get("RION_X_ACCESS_TOKEN"),
+                access_token_secret=os.environ.get("RION_X_ACCESS_SECRET"),
+                wait_on_rate_limit=True,
+            )
             me = c.get_me()
-            if not me.data:
-                raise RuntimeError("get_me() failed: no data")
-            ids = fetch_all_tweet_ids(c, me.data.id)
-            return me.data.username, ids
+            if not me or not me.data:
+                raise RuntimeError("アカウント情報取得失敗")
+            ids = []
+            token = None
+            while True:
+                kwargs = {"max_results": 100}
+                if token:
+                    kwargs["pagination_token"] = token
+                resp = c.get_users_tweets(me.data.id, **kwargs)
+                if resp.data:
+                    ids.extend(str(t.id) for t in resp.data)
+                token = (resp.meta or {}).get("next_token")
+                if not token:
+                    break
+            return me.data.username, ids, c
 
-        username, ids = await asyncio.to_thread(_collect)
+        username, ids, client = await asyncio.to_thread(_collect)
+        context.user_data["wipe_client"] = client
     except Exception as e:
         await msg.edit_text(f"❌ 集計失敗: {e}")
         return
@@ -1578,8 +1594,7 @@ async def cmd_wipe_tweets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         InlineKeyboardButton("キャンセル", callback_data="wipe_tweets:cancel"),
     ]])
     await msg.edit_text(
-        f"⚠️ @{username} の投稿済みツイート {len(ids)}件 が見つかりました。\n"
-        "削除すると元に戻せません。本当に削除しますか？",
+        f"@{username} のツイート {len(ids)}件 が見つかりました。\n削除しますか？",
         reply_markup=keyboard,
     )
 
@@ -1587,23 +1602,20 @@ async def cmd_wipe_tweets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def handle_wipe_tweets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    if str(update.effective_user.id) != str(ADMIN_CHAT_ID):
-        await query.edit_message_text("⚠️ 管理者専用です。")
-        return
     action = query.data.split(":", 1)[1]
     if action == "cancel":
         context.user_data.pop("wipe_tweet_ids", None)
-        await query.edit_message_text("キャンセルしました。ツイートは削除していません。")
+        context.user_data.pop("wipe_client", None)
+        await query.edit_message_text("キャンセルしました。")
         return
     ids = context.user_data.pop("wipe_tweet_ids", [])
-    if not ids:
-        await query.edit_message_text("対象が見つかりませんでした。もう一度 /wipe_tweets を実行してください。")
+    client = context.user_data.pop("wipe_client", None)
+    if not ids or not client:
+        await query.edit_message_text("セッション切れです。もう一度 /wipe_tweets を実行してください。")
         return
     await query.edit_message_text(f"🗑 削除中...（{len(ids)}件）")
 
     import asyncio
-    from delete_all_tweets import _client
-    client = _client()
 
     def _do_delete():
         deleted = 0
@@ -3172,6 +3184,7 @@ def main() -> None:
             BotCommand("start", "メインメニューを表示"),
             BotCommand("images", "画像管理"),
             BotCommand("agent", "AIブラウザエージェント"),
+            BotCommand("wipe_tweets", "りおんのツイートを全削除"),
         ])
         logger.info("Telegramコマンドメニューを更新しました")
         # Drive フォルダ構成をバックグラウンドで先読み
