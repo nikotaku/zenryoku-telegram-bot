@@ -2383,20 +2383,24 @@ async def handle_guidance_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text(f"❌ {result.get('message', '')}")
                 return
             chat_id = query.message.chat_id
-            # スクリーンショット
+            # スクリーンショット（出勤表＋編集ページ）
             shot = result.get("screenshot", "")
             if shot and os.path.exists(shot):
                 with open(shot, "rb") as f:
                     await context.bot.send_photo(chat_id=chat_id, photo=f, caption="📸 出勤表ページ")
+            edit_shot = result.get("edit_screenshot", "")
+            if edit_shot and os.path.exists(edit_shot):
+                with open(edit_shot, "rb") as f:
+                    await context.bot.send_photo(chat_id=chat_id, photo=f, caption="📸 セラピスト編集ページ")
             # HTML をファイルとして送信
             html = result.get("html", "")
             if html:
                 import io
                 buf = io.BytesIO(html.encode("utf-8"))
-                buf.name = "schedule.html"
+                buf.name = "schedule_edit.html"
                 await context.bot.send_document(
-                    chat_id=chat_id, document=buf, filename="schedule.html",
-                    caption="🔍 出勤表テーブルのHTML（このファイルを開発者に共有してください）",
+                    chat_id=chat_id, document=buf, filename="schedule_edit.html",
+                    caption="🔍 編集ページのHTML（このファイルを開発者に共有してください）",
                 )
             await query.edit_message_text("✅ 出勤表ページのHTML・スクショを送信しました。")
         except Exception as e:
