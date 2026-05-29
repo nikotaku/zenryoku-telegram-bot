@@ -5,9 +5,26 @@
 import os
 import random
 import logging
+from pathlib import Path
 import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
+
+CONTEXT_FILE = Path(__file__).parent / "rion_context.md"
+
+
+def _load_context() -> str:
+    if not CONTEXT_FILE.exists():
+        return ""
+    text = CONTEXT_FILE.read_text(encoding="utf-8")
+    # "- テキスト" 形式の行に実際の内容があるか確認
+    has_content = any(
+        l.strip().startswith("- ") and len(l.strip()) > 2
+        for l in text.splitlines()
+    )
+    if not has_content:
+        return ""
+    return text.strip()
 
 # ──────────────────────────────────────────
 # ペルソナ設定
@@ -77,9 +94,11 @@ def generate_post(post_type: str = None) -> str:
     prompt = POST_TYPES.get(post_type, POST_TYPES["daily"])
 
     try:
+        ctx = _load_context()
+        context_block = f"\n\n【りおんの最近のネタ帳（参考にしてください）】\n{ctx}" if ctx else ""
         model = _get_model()
         response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": f"{SYSTEM_PROMPT}\n\n【今回の投稿テーマ】{prompt}"}]}],
+            contents=[{"role": "user", "parts": [{"text": f"{SYSTEM_PROMPT}{context_block}\n\n【今回の投稿テーマ】{prompt}"}]}],
             generation_config=genai.types.GenerationConfig(max_output_tokens=500),
         )
         return response.text.strip()
