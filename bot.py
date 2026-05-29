@@ -1546,6 +1546,72 @@ async def cmd_chatid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     chat_id = update.effective_chat.id
     await update.message.reply_text(f"このチャット（グループ）のIDは以下です：\n`{chat_id}`\nこれをシステムに登録してください。", parse_mode="Markdown")
 
+
+async def cmd_wipe_tweets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """りおんアカウントの投稿済みツイートを全削除（管理者のみ・確認ボタン付き）"""
+    if str(update.effective_user.id) != str(ADMIN_CHAT_ID):
+        await update.message.reply_text("⚠️ このコマンドは管理者専用です。")
+        return
+    msg = await update.message.reply_text("🔍 削除対象のツイートを集計中...")
+    try:
+        import asyncio
+        from delete_all_tweets import _client, fetch_all_tweet_ids
+        client = _client()
+        me = client.get_me()
+        ids = await asyncio.to_thread(fetch_all_tweet_ids, client, me.data.id)
+    except Exception as e:
+        await msg.edit_text(f"❌ 集計失敗: {e}")
+        return
+    if not ids:
+        await msg.edit_text("削除対象のツイートはありませんでした。")
+        return
+    context.user_data["wipe_tweet_ids"] = ids
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"🗑 {len(ids)}件すべて削除", callback_data="wipe_tweets:confirm"),
+        InlineKeyboardButton("キャンセル", callback_data="wipe_tweets:cancel"),
+    ]])
+    await msg.edit_text(
+        f"⚠️ @{me.data.username} の投稿済みツイート {len(ids)}件 が見つかりました。\n"
+        "削除すると元に戻せません。本当に削除しますか？",
+        reply_markup=keyboard,
+    )
+
+
+async def handle_wipe_tweets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if str(update.effective_user.id) != str(ADMIN_CHAT_ID):
+        await query.edit_message_text("⚠️ 管理者専用です。")
+        return
+    action = query.data.split(":", 1)[1]
+    if action == "cancel":
+        context.user_data.pop("wipe_tweet_ids", None)
+        await query.edit_message_text("キャンセルしました。ツイートは削除していません。")
+        return
+    ids = context.user_data.pop("wipe_tweet_ids", [])
+    if not ids:
+        await query.edit_message_text("対象が見つかりませんでした。もう一度 /wipe_tweets を実行してください。")
+        return
+    await query.edit_message_text(f"🗑 削除中...（{len(ids)}件）")
+
+    import asyncio
+    from delete_all_tweets import _client
+    client = _client()
+
+    def _do_delete():
+        deleted = 0
+        for tid in ids:
+            try:
+                client.delete_tweet(tid)
+                deleted += 1
+            except Exception as e:
+                logger.error(f"ツイート削除失敗 {tid}: {e}")
+        return deleted
+
+    deleted = await asyncio.to_thread(_do_delete)
+    await query.edit_message_text(f"✅ 完了: {deleted}/{len(ids)}件 削除しました。")
+
+
 async def scheduled_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
     """定期実行される同期ジョブ"""
     import os
@@ -2984,6 +3050,8 @@ def main() -> None:
 
     # コマンドの追加
     app.add_handler(CommandHandler("chatid", cmd_chatid))
+    app.add_handler(CommandHandler("wipe_tweets", cmd_wipe_tweets))
+    app.add_handler(CallbackQueryHandler(handle_wipe_tweets_callback, pattern=r"^wipe_tweets:"))
 
 
 
