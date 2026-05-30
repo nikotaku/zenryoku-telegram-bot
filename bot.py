@@ -162,13 +162,14 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("🤖 エージェント"), KeyboardButton("💰 仮想通貨")],
         [KeyboardButton("🔗 掲載ページ確認"), KeyboardButton("⚙️ 各種管理画面")],
         [KeyboardButton("🌸 りおん自動運用"), KeyboardButton("⏰ ご案内設定")],
+        [KeyboardButton("🎨 画像加工")],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
 )
 
 # メニューボタンの正規表現（会話状態でも常に効くようにするため）
-MENU_BUTTONS_REGEX = r"^(📲 ブログ一斉投稿|💼 出稼ぎスケジュール登録|📸 画像管理|💴 経費を入力|🤖 エージェント|💰 仮想通貨|🔗 掲載ページ確認|⚙️ 各種管理画面|🌸 りおん自動運用|⏰ ご案内設定|❌ キャンセル|/start|/cancel)$"
+MENU_BUTTONS_REGEX = r"^(📲 ブログ一斉投稿|💼 出稼ぎスケジュール登録|📸 画像管理|💴 経費を入力|🤖 エージェント|💰 仮想通貨|🔗 掲載ページ確認|⚙️ 各種管理画面|🌸 りおん自動運用|⏰ ご案内設定|🎨 画像加工|❌ キャンセル|/start|/cancel)$"
 
 
 async def force_exit_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -291,6 +292,11 @@ async def handle_images(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """画像が送信された時の処理 — アルバム（まとめ送信）対応"""
     if not update.message.photo:
+        return
+
+    # 画像加工モード中は加工ハンドラに委譲
+    if context.user_data.get("image_edit_waiting"):
+        await handle_image_edit_photo(update, context)
         return
 
     file_id = update.message.photo[-1].file_id
@@ -2889,6 +2895,138 @@ async def handle_admin_dashboards(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+# ─── 🎨 画像加工 ───────────────────────────────────────────────────────────────
+
+async def handle_image_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """「🎨 画像加工」ボタン → 写真を送るよう促す"""
+    context.user_data["image_edit_waiting"] = True
+    await update.message.reply_text(
+        "🎨 画像加工\n\n加工したい画像を送ってください。",
+    )
+
+
+async def handle_image_edit_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """画像加工モード中の写真受信 → 加工メニュー表示"""
+    if not context.user_data.pop("image_edit_waiting", False):
+        return  # 加工モードでなければスルー（通常の写真ハンドラに委譲しない）
+
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    import io as _io
+    buf = _io.BytesIO()
+    await file.download_to_memory(buf)
+    context.user_data["image_edit_bytes"] = buf.getvalue()
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📐 ピクセル調整（リサイズ）", callback_data="imgedit:pixel")],
+        [InlineKeyboardButton("🙈 顔にモザイク", callback_data="imgedit:mosaic")],
+        [InlineKeyboardButton("👗 服の色を変更", callback_data="imgedit:color")],
+        [InlineKeyboardButton("🕺 ポーズを変更", callback_data="imgedit:pose")],
+        [InlineKeyboardButton("❌ キャンセル", callback_data="imgedit:cancel")],
+    ])
+    await update.message.reply_text("どの加工をしますか？", reply_markup=keyboard)
+
+
+async def handle_image_edit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """画像加工メニューのコールバック"""
+    query = update.callback_query
+    await query.answer()
+    action = query.data.split(":", 1)[1]
+
+    if action == "cancel":
+        context.user_data.pop("image_edit_bytes", None)
+        context.user_data.pop("image_edit_action", None)
+        await query.edit_message_text("キャンセルしました。")
+        return
+
+    image_bytes = context.user_data.get("image_edit_bytes")
+    if not image_bytes:
+        await query.edit_message_text("画像が見つかりません。もう一度 🎨 画像加工 から始めてください。")
+        return
+
+    if action == "mosaic":
+        await query.edit_message_text("🙈 顔を検出してモザイク処理中...")
+        try:
+            import asyncio
+            from image_editor import face_mosaic
+            result, count = await asyncio.to_thread(face_mosaic, image_bytes)
+            context.user_data.pop("image_edit_bytes", None)
+            if count == 0:
+                await query.edit_message_text("顔が検出できませんでした。別の画像をお試しください。")
+            else:
+                await query.edit_message_text(f"✅ {count}個の顔にモザイクをかけました。")
+                await context.bot.send_photo(update.effective_chat.id, photo=result)
+        except Exception as e:
+            await query.edit_message_text(f"❌ エラー: {e}")
+
+    elif action == "pixel":
+        context.user_data["image_edit_action"] = "pixel"
+        await query.edit_message_text(
+            "📐 リサイズ後のサイズを「横x縦」で送ってください。\n例: `800x600`",
+            parse_mode="Markdown",
+        )
+
+    elif action == "color":
+        context.user_data["image_edit_action"] = "color"
+        await query.edit_message_text("👗 変更後の色を日本語か英語で送ってください。\n例: `赤` / `red` / `ネイビーブルー`")
+
+    elif action == "pose":
+        context.user_data["image_edit_action"] = "pose"
+        await query.edit_message_text("🕺 変更後のポーズを説明してください。\n例: `両手を上げて立っている` / `sitting on a chair`")
+
+
+async def handle_image_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """画像加工のパラメータ入力（テキスト）を処理する"""
+    action = context.user_data.get("image_edit_action")
+    if not action:
+        return False  # 画像加工モードでない
+    image_bytes = context.user_data.get("image_edit_bytes")
+    if not image_bytes:
+        return False
+    text = update.message.text.strip()
+
+    import asyncio
+    from image_editor import pixel_adjust, change_clothing_color, change_pose
+
+    context.user_data.pop("image_edit_action", None)
+    context.user_data.pop("image_edit_bytes", None)
+
+    if action == "pixel":
+        try:
+            parts = text.lower().replace("×", "x").split("x")
+            w, h = int(parts[0].strip()), int(parts[1].strip())
+        except Exception:
+            await update.message.reply_text("❌ サイズの形式が正しくありません。`800x600` のように入力してください。")
+            return True
+        msg = await update.message.reply_text(f"📐 {w}x{h} にリサイズ中...")
+        try:
+            result = await asyncio.to_thread(pixel_adjust, image_bytes, w, h)
+            await msg.delete()
+            await context.bot.send_photo(update.effective_chat.id, photo=result, caption=f"✅ {w}x{h} にリサイズしました")
+        except Exception as e:
+            await msg.edit_text(f"❌ エラー: {e}")
+
+    elif action == "color":
+        msg = await update.message.reply_text(f"👗 服の色を「{text}」に変更中...（30秒〜1分かかります）")
+        try:
+            result = await asyncio.to_thread(change_clothing_color, image_bytes, text)
+            await msg.delete()
+            await context.bot.send_photo(update.effective_chat.id, photo=result, caption=f"✅ 服の色を「{text}」に変更しました")
+        except Exception as e:
+            await msg.edit_text(f"❌ エラー: {e}")
+
+    elif action == "pose":
+        msg = await update.message.reply_text(f"🕺 ポーズを変更中...（30秒〜1分かかります）")
+        try:
+            result = await asyncio.to_thread(change_pose, image_bytes, text)
+            await msg.delete()
+            await context.bot.send_photo(update.effective_chat.id, photo=result, caption=f"✅ ポーズを変更しました")
+        except Exception as e:
+            await msg.edit_text(f"❌ エラー: {e}")
+
+    return True
+
+
 # ─── 🌸 自動投稿メニュー（元:りおん自動運用）───────────────────────────────
 async def handle_rion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """自動投稿メニュー"""
@@ -2943,6 +3081,12 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─── その他 ──────────────────────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ"""
+    # 画像加工パラメータ入力待ち
+    if context.user_data.get("image_edit_action"):
+        handled = await handle_image_edit_text(update, context)
+        if handled:
+            return
+
     # ご案内スケジュール時刻入力待ち
     if context.user_data.get("guidance_pending_status"):
         handled = await handle_guidance_time_text(update, context)
@@ -3144,6 +3288,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^🔗 掲載ページ確認$"), handle_media_pages))
     app.add_handler(MessageHandler(filters.Regex(r"^⚙️ 各種管理画面$"), handle_admin_dashboards))
     app.add_handler(MessageHandler(filters.Regex(r"^🌸 りおん自動運用$"), handle_rion_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^🎨 画像加工$"), handle_image_edit_menu))
+    app.add_handler(CallbackQueryHandler(handle_image_edit_callback, pattern=r"^imgedit:"))
     app.add_handler(CallbackQueryHandler(handle_rion_callback, pattern=r"^rion:"))
     app.add_handler(MessageHandler(filters.Regex(r"^⏰ ご案内設定$"), handle_guidance_menu))
     app.add_handler(CallbackQueryHandler(handle_guidance_callback, pattern=r"^guidance:"))
