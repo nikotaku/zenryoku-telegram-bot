@@ -26,8 +26,9 @@ def pixel_adjust(image_bytes: bytes, width: int, height: int) -> bytes:
     return out.getvalue()
 
 
-def face_mosaic(image_bytes: bytes, block_size: int = 15) -> tuple[bytes, int]:
-    """顔検出してモザイク。(処理後bytes, 検出顔数) を返す。"""
+def face_mosaic(image_bytes: bytes, block_size: int = 15, mode: str = "face") -> tuple[bytes, int]:
+    """顔検出してモザイク。mode: face=顔全体, mouth=口のみ, eyes=目のみ, face_mouth=顔+口別々
+    (処理後bytes, 検出顔数) を返す。"""
     import cv2
     import numpy as np
 
@@ -41,10 +42,37 @@ def face_mosaic(image_bytes: bytes, block_size: int = 15) -> tuple[bytes, int]:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
-    for (x, y, w, h) in faces:
+    def _mosaic(img, x, y, w, h, bs):
         roi = img[y:y + h, x:x + w]
-        small = cv2.resize(roi, (max(1, w // block_size), max(1, h // block_size)))
+        small = cv2.resize(roi, (max(1, w // bs), max(1, h // bs)))
         img[y:y + h, x:x + w] = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    for (fx, fy, fw, fh) in faces:
+        if mode == "face":
+            _mosaic(img, fx, fy, fw, fh, block_size)
+        elif mode == "mouth":
+            # 口は顔の下1/3、横は中央60%
+            mx = fx + int(fw * 0.2)
+            my = fy + int(fh * 0.65)
+            mw = int(fw * 0.6)
+            mh = int(fh * 0.25)
+            _mosaic(img, mx, my, mw, mh, block_size)
+        elif mode == "eyes":
+            # 目は顔の上1/3〜中央、横全体
+            ex = fx + int(fw * 0.05)
+            ey = fy + int(fh * 0.2)
+            ew = int(fw * 0.9)
+            eh = int(fh * 0.25)
+            _mosaic(img, ex, ey, ew, eh, block_size)
+        elif mode == "face_mouth":
+            # 顔全体モザイク（口を別途強調なし、全体を少し粗く）
+            _mosaic(img, fx, fy, fw, fh, block_size)
+            # さらに口を荒いモザイクで上書き
+            mx = fx + int(fw * 0.2)
+            my = fy + int(fh * 0.65)
+            mw = int(fw * 0.6)
+            mh = int(fh * 0.25)
+            _mosaic(img, mx, my, mw, mh, max(1, block_size * 2))
 
     _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return bytes(buf), len(faces)
@@ -66,7 +94,7 @@ def _replicate_edit(image_bytes: bytes, prompt: str) -> bytes:
 
     output = client.run(
         REPLICATE_MODEL,
-        input={"input_image": img_file, "prompt": prompt},
+        input={"input_image": img_file, "prompt": prompt, "safety_tolerance": 6},
     )
 
     # output は URL文字列 or FileOutput or list
