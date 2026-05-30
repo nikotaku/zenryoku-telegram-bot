@@ -2919,7 +2919,10 @@ async def handle_image_edit_photo(update: Update, context: ContextTypes.DEFAULT_
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📐 ピクセル調整（リサイズ）", callback_data="imgedit:pixel")],
-        [InlineKeyboardButton("🙈 顔にモザイク", callback_data="imgedit:mosaic")],
+        [InlineKeyboardButton("🙈 顔モザイク（全体）", callback_data="imgedit:mosaic_face")],
+        [InlineKeyboardButton("👄 口だけモザイク", callback_data="imgedit:mosaic_mouth")],
+        [InlineKeyboardButton("👁 目だけモザイク", callback_data="imgedit:mosaic_eyes")],
+        [InlineKeyboardButton("🙈 顔全体＋口を強調", callback_data="imgedit:mosaic_face_mouth")],
         [InlineKeyboardButton("👗 服の色を変更", callback_data="imgedit:color")],
         [InlineKeyboardButton("🕺 ポーズを変更", callback_data="imgedit:pose")],
         [InlineKeyboardButton("❌ キャンセル", callback_data="imgedit:cancel")],
@@ -2944,17 +2947,24 @@ async def handle_image_edit_callback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text("画像が見つかりません。もう一度 🎨 画像加工 から始めてください。")
         return
 
-    if action == "mosaic":
-        await query.edit_message_text("🙈 顔を検出してモザイク処理中...")
+    _mosaic_modes = {
+        "mosaic_face": ("face", "顔全体"),
+        "mosaic_mouth": ("mouth", "口"),
+        "mosaic_eyes": ("eyes", "目"),
+        "mosaic_face_mouth": ("face_mouth", "顔全体＋口強調"),
+    }
+    if action in _mosaic_modes:
+        mode_key, mode_label = _mosaic_modes[action]
+        await query.edit_message_text(f"🙈 {mode_label}にモザイク処理中...")
         try:
             import asyncio
             from image_editor import face_mosaic
-            result, count = await asyncio.to_thread(face_mosaic, image_bytes)
+            result, count = await asyncio.to_thread(face_mosaic, image_bytes, 15, mode_key)
             context.user_data.pop("image_edit_bytes", None)
             if count == 0:
                 await query.edit_message_text("顔が検出できませんでした。別の画像をお試しください。")
             else:
-                await query.edit_message_text(f"✅ {count}個の顔にモザイクをかけました。")
+                await query.edit_message_text(f"✅ {count}個の顔の{mode_label}にモザイクをかけました。")
                 await context.bot.send_photo(update.effective_chat.id, photo=result)
         except Exception as e:
             await query.edit_message_text(f"❌ エラー: {e}")
