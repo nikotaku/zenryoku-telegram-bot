@@ -3397,9 +3397,16 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             self.end_headers()
 
 def keep_alive():
+    import socket
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), WebAppHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        server = HTTPServer(("0.0.0.0", port), WebAppHandler)
+        server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        logger.info(f"keep-alive サーバーをポート {port} で起動")
+    except OSError as e:
+        logger.warning(f"keep-alive サーバー起動失敗（ポート {port} 使用中）: {e} — bot本体は続行")
+
 
 if __name__ == "__main__":
     keep_alive()

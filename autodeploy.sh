@@ -20,9 +20,11 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 新しいコミットを検出: $REMOTE" | 
 
 git reset --hard "origin/$BRANCH" >> "$LOG" 2>&1
 
-# 既存プロセスを停止（venv/bin/python, python, python3 どれでも）
-pkill -f "bot\.py" 2>/dev/null || true
+# 既存プロセスを停止（確実にKILLして解放を待つ）
+pkill -TERM -f "bot\.py" 2>/dev/null || true
 sleep 2
+pkill -KILL -f "bot\.py" 2>/dev/null || true
+sleep 1
 
 # 使用するpythonを自動検出
 if [ -f "$REPO_DIR/venv/bin/python" ]; then
