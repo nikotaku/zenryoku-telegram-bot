@@ -21,12 +21,14 @@ import os
 import asyncio
 import logging
 import json
+import random
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import tweepy
 import pytz
 
+import rion_config
 from rion_persona import (
     generate_post,
     generate_reply,
@@ -44,10 +46,11 @@ REPLIED_IDS_FILE = Path("rion_replied_ids.json")
 
 
 def _get_client() -> tweepy.Client | None:
-    api_key = os.environ.get("RION_X_API_KEY", "")
-    api_secret = os.environ.get("RION_X_API_SECRET", "")
-    access_token = os.environ.get("RION_X_ACCESS_TOKEN", "")
-    access_secret = os.environ.get("RION_X_ACCESS_SECRET", "")
+    # 設定ファイル優先、なければ環境変数
+    api_key = rion_config.get_credential("RION_X_API_KEY")
+    api_secret = rion_config.get_credential("RION_X_API_SECRET")
+    access_token = rion_config.get_credential("RION_X_ACCESS_TOKEN")
+    access_secret = rion_config.get_credential("RION_X_ACCESS_SECRET")
 
     if not all([api_key, api_secret, access_token, access_secret]):
         logger.error("X API 認証情報が不足しています。環境変数を確認してください。")
@@ -280,6 +283,11 @@ async def run_scheduler():
         if now.hour == 0 and now.minute < 2:
             posted_today.clear()
 
+        # 自動運用が無効なら何もせず待機（枠組みは残す）
+        if not rion_config.is_enabled():
+            await asyncio.sleep(60)
+            continue
+
         for i, slot in enumerate(SCHEDULE):
             if i in posted_today:
                 continue
@@ -293,10 +301,12 @@ async def run_scheduler():
                 else:
                     text = generate_post(post_type)
                 if text:
-                    success = post_tweet(text)
+                    success, err = post_tweet(text)
                     if success:
                         posted_today.add(i)
                         logger.info(f"スロット{i}投稿完了: {post_type}")
+                    else:
+                        logger.error(f"スロット{i}投稿失敗: {err}")
 
         # 30分おきに自動リプ（生成APIキーがある時のみ。無いと返信文を作れず検索枠が無駄になる）
         if now.minute % 30 == 0 and os.environ.get("ANTHROPIC_API_KEY"):

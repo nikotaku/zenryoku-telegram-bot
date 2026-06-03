@@ -40,3 +40,6 @@ Thumbs.db
 
 # Runtime data
 photo_index.json
+rion_config.json
+rion_replied_ids.json
+rion_retweeted_ids.json
