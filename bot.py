@@ -3040,15 +3040,30 @@ async def handle_image_edit_text(update: Update, context: ContextTypes.DEFAULT_T
 # ─── 🌸 自動投稿メニュー（元:りおん自動運用）───────────────────────────────
 async def handle_rion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """自動投稿メニュー"""
+    import rion_config
+    enabled = rion_config.is_enabled()
+    has_cred = rion_config.has_credentials()
+
+    status_line = "🟢 稼働中" if enabled else "🔴 停止中"
+    cred_line = "✅ 設定済み" if has_cred else "⚠️ 未設定"
+    toggle_btn = (
+        InlineKeyboardButton("⏹ 自動運用を停止", callback_data="rion:disable")
+        if enabled
+        else InlineKeyboardButton("▶️ 自動運用を開始", callback_data="rion:enable")
+    )
+
     keyboard = InlineKeyboardMarkup([
+        [toggle_btn],
+        [InlineKeyboardButton("🔑 X APIキーを入力", callback_data="rion:setkey")],
         [InlineKeyboardButton("📢 本日のシフト速報", callback_data="rion:today")],
         [InlineKeyboardButton("🆕 明日のスタメン発表", callback_data="rion:tomorrow")],
         [InlineKeyboardButton("✨ お得なご案内（プロモ）", callback_data="rion:promo")],
     ])
     await update.message.reply_text(
-        "🌸 【自動投稿】\n\n"
-        "投稿タイプを選択してください。\n"
-        "承認リクエストがTelegramに届きます。",
+        "🌸 【りおん自動運用】\n\n"
+        f"自動ツイート: {status_line}\n"
+        f"X APIキー: {cred_line}\n\n"
+        "自動運用を開始すると、スケジュールに沿って自動でツイート・リプ・RTを行います。",
         reply_markup=keyboard,
     )
 
@@ -3058,6 +3073,42 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     action = query.data.replace("rion:", "")
+
+    if action == "enable":
+        import rion_config
+        if not rion_config.has_credentials():
+            await query.edit_message_text(
+                "⚠️ X APIキーが未設定のため開始できません。\n"
+                "先に「🔑 X APIキーを入力」からキーを設定してください。"
+            )
+            return
+        rion_config.set_enabled(True)
+        await query.edit_message_text(
+            "▶️ りおん自動運用を開始しました。\n"
+            "スケジュールに沿って自動ツイート・リプ・RTを行います。"
+        )
+        return
+
+    if action == "disable":
+        import rion_config
+        rion_config.set_enabled(False)
+        await query.edit_message_text(
+            "⏹ りおん自動運用を停止しました。\n"
+            "枠組みは残っているので、いつでも再開できます。"
+        )
+        return
+
+    if action == "setkey":
+        context.user_data["rion_setkey_waiting"] = True
+        await query.edit_message_text(
+            "🔑 X APIキーを以下の順に【改行区切り】で1メッセージに貼り付けて送ってください:\n\n"
+            "1行目: API Key (Consumer Key)\n"
+            "2行目: API Secret (Consumer Secret)\n"
+            "3行目: Access Token\n"
+            "4行目: Access Token Secret\n\n"
+            "※入力後、メッセージは削除することをおすすめします。"
+        )
+        return
 
     if action == "today":
         await query.edit_message_text("⏳ 本日のシフトを取得中...")
@@ -3089,8 +3140,49 @@ async def handle_rion_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # ─── その他 ──────────────────────────────────────────────────────────────
+async def handle_rion_setkey_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """X APIキー4行入力を処理する。"""
+    if not context.user_data.get("rion_setkey_waiting"):
+        return False
+    context.user_data.pop("rion_setkey_waiting", None)
+
+    lines = [l.strip() for l in update.message.text.strip().splitlines() if l.strip()]
+    if len(lines) < 4:
+        await update.message.reply_text(
+            "⚠️ 4行（API Key / API Secret / Access Token / Access Secret）が必要です。\n"
+            "もう一度「🔑 X APIキーを入力」からやり直してください。",
+            reply_markup=MENU_KEYBOARD,
+        )
+        return True
+
+    import rion_config
+    rion_config.set_credentials(lines[0], lines[1], lines[2], lines[3])
+
+    # 入力メッセージを削除（セキュリティ）
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            "✅ X APIキーを保存しました。\n"
+            "「🌸 りおん自動運用」→「▶️ 自動運用を開始」で稼働できます。"
+        ),
+        reply_markup=MENU_KEYBOARD,
+    )
+    return True
+
+
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """ボタン以外のテキストメッセージ"""
+    # X APIキー入力待ち
+    if context.user_data.get("rion_setkey_waiting"):
+        handled = await handle_rion_setkey_text(update, context)
+        if handled:
+            return
+
     # 画像加工パラメータ入力待ち
     if context.user_data.get("image_edit_action"):
         handled = await handle_image_edit_text(update, context)
